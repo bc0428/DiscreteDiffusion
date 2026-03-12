@@ -330,13 +330,17 @@ class TheoryDenoiserNet(nn.Module):
     permutation invariance of logic rules.
     """
 
-    def __init__(self, N, M, num_classes=3, d_model=128):
+    def __init__(self, N, M, num_classes=3, d_model=128, num_timesteps=1000):
         super().__init__()
         self.N = N
         self.M = M
+        self.num_timesteps = num_timesteps
 
         # Embed the discrete states (0, 1, 2) into continuous vectors
         self.state_embedding = nn.Embedding(num_classes, d_model)
+
+        # FIX 1: Add Row Embeddings to provide spatial awareness for literals (which are NOT permutation invariant)
+        self.row_embedding = nn.Embedding(N, d_model)
 
         # Embed the timestep t
         self.time_embed = nn.Sequential(
@@ -355,9 +359,18 @@ class TheoryDenoiserNet(nn.Module):
     def forward(self, x_t, t, clause_mask=None):
         batch_size, N, M = x_t.size()
 
+        # Generate and apply row embeddings
+        row_idx = torch.arange(self.N, device=x_t.device).view(1, self.N, 1)
+        r_emb = self.row_embedding(row_idx)
+
         x_emb = self.state_embedding(x_t)
-        t_emb = self.time_embed(t.float().unsqueeze(-1)).view(batch_size, 1, 1, -1)
-        x_emb = x_emb + t_emb
+
+        # FIX 2: Normalize timesteps so time embeddings don't overpower state embeddings
+        t_normalized = t.float() / self.num_timesteps
+        t_emb = self.time_embed(t_normalized.unsqueeze(-1)).view(batch_size, 1, 1, -1)
+
+        # Inject both time and row awareness
+        x_emb = x_emb + t_emb + r_emb
 
         x_seq = x_emb.view(batch_size, N * M, -1)
 
@@ -371,6 +384,20 @@ class TheoryDenoiserNet(nn.Module):
 
         return logits.view(batch_size, N, M, -1)
 
+
+# FIX 3: Iterative reverse-process sampling function
+def sample_theories(model, N, M, batch_size, num_timesteps, device):
+    """
+    Generate theories from pure noise using the reverse diffusion process (step by step).
+    """
+    model.eval()
+    with torch.no_grad():
+        x_t = torch.randint(0, 3, (batch_size, N, M), device=device)
+        for t_step in reversed(range(num_timesteps)):
+            t_tensor = torch.full((batch_size,), t_step, device=device, dtype=torch.long)
+            logits = model(x_t, t_tensor)
+            x_t = logits.argmax(dim=-1)
+    return x_t
 
 def run_epoch(model, corrupt, dataloader, optimizer=None):
     """
@@ -400,23 +427,38 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
     total_count = 0
 
     for x_0, clause_mask in dataloader:
-        batch_stats = None
-        loss = None
-
         if is_training:
             optimizer.zero_grad()
             batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
             loss = batch_stats["loss"]
             loss.backward()
             optimizer.step()
+
+            total_loss += loss.item()
+            consistent_count += batch_stats["consistent_count"]
+            total_count += batch_stats["batch_size"]
         else:
             with torch.no_grad():
+                # Compute loss using the standard noisy forward pass
                 batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
                 loss = batch_stats["loss"]
+                total_loss += loss.item()
 
-        total_loss += loss.item()
-        consistent_count += batch_stats["consistent_count"]
-        total_count += batch_stats["batch_size"]
+                # FIX 3: Evaluate true generation quality iteratively (rather than 1-shot denoising)
+                batch_size = x_0.size(0)
+                device = x_0.device
+                generated_theories = sample_theories(model, model.N, x_0.size(2), batch_size, model.num_timesteps,
+                                                     device)
+
+                batch_consistent = 0
+                for b in range(batch_size):
+                    # We evaluate on the valid (unpadded) clauses length for each sample
+                    active_theory = generated_theories[b, :, clause_mask[b]].detach().cpu()
+                    if active_theory.numel() > 0 and is_consistent(active_theory):
+                        batch_consistent += 1
+
+                consistent_count += batch_consistent
+                total_count += batch_size
 
     avg_loss = total_loss / len(dataloader)
     consistency_rate = 100.0 * consistent_count / total_count if total_count else 0.0
@@ -481,7 +523,7 @@ if __name__ == "__main__":
 
     # ── Model, optimizer ───────────────────────────────────────────────────────
     corrupt = D3PMForwardCorruption(num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS)
-    model = TheoryDenoiserNet(N=N_LITERALS, M=M_CLAUSES, num_classes=K_STATES)
+    model = TheoryDenoiserNet(N=N_LITERALS, M=M_CLAUSES, num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     # ── Training + Evaluation loop ─────────────────────────────────────────────
