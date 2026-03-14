@@ -1,0 +1,416 @@
+"""
+test_model.py
+=============
+Evaluates a saved TheoryDenoiserNet checkpoint on two theory families:
+
+  Phase 1 – IN-DISTRIBUTION
+    Consistent theories generated the same way as training:
+    each literal is restricted to one polarity across all clauses
+    (absent-only | positive-only | negative-only).
+
+  Phase 2 – OUT-OF-DISTRIBUTION
+    Theories where different literals can have DIFFERENT signs in
+    different clauses, as long as the whole CNF is still SAT-consistent.
+    This breaks the per-literal single-polarity assumption used in training.
+
+For each phase, three metrics are reported per theory:
+
+  1. Revision steps
+       Number of clauses removed that would otherwise make the theory
+       trivially consistent (all-zero / empty) during iterative denoising.
+       Guards against the degenerate solution of zeroing out everything.
+
+  2. Denoising steps to first consistent theory
+       The reverse diffusion loop stops as soon as a SAT-consistent
+       prediction is found, rather than running all T steps.
+       Reports the step at which that first happened, or T if never found.
+
+  3. Consistency rate
+       Percentage of all test theories that reached a consistent prediction
+       within the allowed steps.
+
+Usage
+-----
+    python test_model.py --checkpoint outputs/theory_denoiser_<run_id>.pt
+
+The checkpoint path can also be set via CHECKPOINT_PATH below.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+from statistics import mean, stdev
+
+import torch
+
+# ── import everything from the training module ────────────────────────────────
+sys.path.insert(0, str(Path(__file__).parent))
+from main import (
+    D3PMForwardCorruption,
+    TheoryDenoiserNet,
+    is_consistent,
+)
+
+# ── default checkpoint (override with --checkpoint) ───────────────────────────
+CHECKPOINT_PATH: str | None = None   # e.g. "outputs/theory_denoiser_20260314_120000.pt"
+
+
+# ==========================================
+# Theory Generators
+# ==========================================
+
+def generate_same_sign_theory(N: int, max_clauses: int) -> torch.Tensor:
+    """
+    Phase 1: same generator as training.
+    Each literal is restricted to ONE polarity across all clauses:
+      absent-only (0), positive-only (0/1), or negative-only (0/2).
+    Guaranteed consistent. Empty clauses are dropped.
+    """
+    while True:
+        theory = torch.zeros(N, max_clauses, dtype=torch.long)
+        for i in range(N):
+            polarity = torch.randint(0, 3, (1,)).item()
+            if polarity == 0:
+                continue
+            if polarity == 1:
+                theory[i] = torch.randint(0, 2, (max_clauses,))
+            else:
+                theory[i] = torch.randint(0, 2, (max_clauses,)) * 2
+        kept = theory[:, (theory != 0).any(dim=0)]
+        if kept.size(1) > 0:
+            return kept
+
+
+def generate_mixed_sign_theory(N: int, max_clauses: int, max_attempts: int = 200) -> torch.Tensor:
+    """
+    Phase 2: literals CAN have different signs across clauses.
+    Each cell is sampled independently from {0, 1, 2}.
+    Empty clauses are dropped.
+    SAT-consistency is verified; if not satisfied, regenerate.
+
+    max_attempts guards against infinite loops on degenerate (N=1) cases.
+    """
+    for _ in range(max_attempts):
+        theory = torch.randint(0, 3, (N, max_clauses), dtype=torch.long)
+        kept = theory[:, (theory != 0).any(dim=0)]
+        if kept.size(1) > 0 and is_consistent(kept):
+            return kept
+
+    # Fallback: return a trivially consistent same-sign theory so we never
+    # block the test loop indefinitely.
+    return generate_same_sign_theory(N, max_clauses)
+
+
+# ==========================================
+# Revision-step counter
+# ==========================================
+
+def count_revision_steps(original: torch.Tensor, denoised: torch.Tensor) -> dict:
+    """
+    Compare original and final (denoised) theory element-wise.
+
+    Returns percentage-only metrics:
+      - total_change_pct: percentage of cells that changed value
+      - empty_change_pct: percentage-point change in empty (0) cells
+                          from original to final
+    """
+    if original.dim() != 2 or denoised.dim() != 2:
+        return {
+            "total_change_pct": 0.0,
+            "empty_change_pct": 0.0,
+        }
+
+    # Align shapes: compare over the min shared columns (handles variable M)
+    min_m = min(original.size(1), denoised.size(1))
+    orig = original[:, :min_m]
+    deno = denoised[:, :min_m]
+
+    total_cells = float(max(1, deno.numel()))
+
+    changed_cells = float((orig != deno).sum().item())
+    original_empty_cells = float((orig == 0).sum().item())
+    final_empty_cells = float((deno == 0).sum().item())
+
+    total_change_pct = 100.0 * changed_cells / total_cells
+    empty_change_pct = 100.0 * (final_empty_cells - original_empty_cells) / total_cells
+
+    return {
+        "total_change_pct": total_change_pct,
+        "empty_change_pct": empty_change_pct,
+    }
+
+
+# ==========================================
+# Per-theory denoising evaluation
+# ==========================================
+
+def denoise_until_consistent(
+    theory: torch.Tensor,
+    model: TheoryDenoiserNet,
+    corrupt: D3PMForwardCorruption,
+    max_steps: int,
+    device: torch.device,
+) -> dict:
+    """
+    Run the reverse diffusion loop on a SINGLE theory.
+
+    Stops as soon as the predicted x_0 is SAT-consistent, or after
+    `max_steps` steps, whichever comes first.
+
+    Returns a dict with:
+      - consistent        : bool   – did we ever reach a consistent theory?
+      - steps_to_first    : int    – step index at which consistency was first found
+                                     (max_steps if never found)
+      - total_revision    : int    – total number of all-zero clause predictions
+                                     summed across ALL denoising steps
+      - final_theory      : Tensor – last predicted x_0, shape (N, M_active)
+    """
+    model.eval()
+
+    N, M = theory.shape
+    # Build clause mask: all columns active (no padding for single theory)
+    clause_mask = torch.ones(1, M, dtype=torch.bool, device=device)
+
+    # Batch-size-1 tensors
+    x_0_ref = theory.unsqueeze(0).to(device)           # (1, N, M)
+
+    with torch.no_grad():
+        # Start from fully noised sample using the clean theory as reference
+        t_max = torch.full((1,), max_steps - 1, device=device, dtype=torch.long)
+        x_t = corrupt.q_sample(x_0_ref, t_max, clause_mask=clause_mask)
+
+        steps_to_first = max_steps
+        reached_consistent = False
+        final_theory = None
+        x_0_pred = x_t  # fallback if loop body never executes
+
+        for t_step in reversed(range(max_steps)):
+            t_tensor = torch.full((1,), t_step, device=device, dtype=torch.long)
+            logits = model(x_t, t_tensor, clause_mask=clause_mask)
+            x_0_pred = logits.argmax(dim=-1)           # (1, N, M)
+
+            # Check SAT consistency on the active (non-padded) columns
+            pred_theory = x_0_pred[0].cpu()            # (N, M)
+            active_theory = pred_theory[:, clause_mask[0].cpu()]
+
+            if is_consistent(active_theory):
+                reached_consistent = True
+                steps_to_first = max_steps - t_step    # steps elapsed so far
+                final_theory = active_theory
+                break                                   # stop early
+
+            if t_step > 0:
+                t_minus_1 = torch.full((1,), t_step - 1, device=device, dtype=torch.long)
+                x_t = corrupt.q_sample(x_0_pred, t_minus_1, clause_mask=clause_mask)
+            else:
+                x_t = x_0_pred
+
+        if final_theory is None:
+            final_theory = x_0_pred[0, :, clause_mask[0].cpu()].cpu()
+
+        # Revision metrics: element-wise diff and empty cells in final theory.
+        # Computed ONCE on original vs final, not accumulated across steps.
+        original_cpu = theory.cpu()           # (N, M) — original input
+        rev = count_revision_steps(original_cpu, final_theory)
+
+    return {
+        "consistent": reached_consistent,
+        "steps_to_first": steps_to_first,
+        "total_change_pct": rev["total_change_pct"],
+        "empty_change_pct": rev["empty_change_pct"],
+        "final_theory": final_theory,
+    }
+
+
+# ==========================================
+# Phase runner
+# ==========================================
+
+def run_phase(
+    phase_name: str,
+    theories: list[torch.Tensor],
+    model: TheoryDenoiserNet,
+    corrupt: D3PMForwardCorruption,
+    max_steps: int,
+    device: torch.device,
+) -> None:
+    """
+    Evaluate a list of theories and print a full summary.
+    """
+    print(f"\n{'=' * 60}")
+    print(f"  {phase_name}")
+    print(f"  {len(theories)} theories  |  max denoising steps: {max_steps}")
+    print(f"{'=' * 60}")
+
+    all_consistent = []
+    all_steps = []
+    all_total_change_pct = []
+    all_empty_change_pct = []
+
+    for idx, theory in enumerate(theories):
+        result = denoise_until_consistent(
+            theory=theory,
+            model=model,
+            corrupt=corrupt,
+            max_steps=max_steps,
+            device=device,
+        )
+        all_consistent.append(result["consistent"])
+        all_steps.append(result["steps_to_first"])
+        all_total_change_pct.append(result["total_change_pct"])
+        all_empty_change_pct.append(result["empty_change_pct"])
+
+        status = "OK" if result["consistent"] else "NO"
+        print(
+            f"  [{idx + 1:>4}] {status} "
+            f"steps={result['steps_to_first']:>4}  "
+            f"total_change={result['total_change_pct']:>6.2f}%  "
+            f"empty_change={result['empty_change_pct']:>+7.2f}%"
+        )
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    n_consistent = sum(all_consistent)
+    consistency_rate = 100.0 * n_consistent / len(theories)
+
+    consistent_steps = [s for s, c in zip(all_steps, all_consistent) if c]
+    avg_steps = mean(consistent_steps) if consistent_steps else float("nan")
+    std_steps = stdev(consistent_steps) if len(consistent_steps) > 1 else 0.0
+
+    avg_total_change = mean(all_total_change_pct)
+    std_total_change = stdev(all_total_change_pct) if len(all_total_change_pct) > 1 else 0.0
+    avg_empty_change = mean(all_empty_change_pct)
+    std_empty_change = stdev(all_empty_change_pct) if len(all_empty_change_pct) > 1 else 0.0
+
+    print(f"\n  -- Summary ---------------------------------------------")
+    print(f"  Metric 1 - Revision percentages (original vs final)")
+    print(f"    Total change % : mean={avg_total_change:.2f}%  std={std_total_change:.2f}%")
+    print(f"    Empty change % : mean={avg_empty_change:+.2f}%  std={std_empty_change:.2f}%")
+    print(f"    (positive empty change => more empty cells in final output)")
+    print()
+    print(f"  Metric 2 – Denoising steps to first consistent theory")
+    print(f"    Evaluated on {n_consistent}/{len(theories)} theories that reached consistency")
+    if consistent_steps:
+        print(f"    Mean : {avg_steps:.1f}  Std : {std_steps:.1f}  (out of {max_steps} max steps)")
+        print(f"    (lower is better; model converged faster)")
+    else:
+        print(f"    No theories reached consistency within {max_steps} steps.")
+    print()
+    print(f"  Metric 3 – Consistency rate")
+    print(f"    {n_consistent} / {len(theories)} = {consistency_rate:.1f}%")
+    print(f"    (higher is better)")
+    print(f"{'=' * 60}")
+
+
+# ==========================================
+# Entry point
+# ==========================================
+
+def find_latest_checkpoint(output_dir: Path) -> Path | None:
+    """Find the most recent checkpoint in the outputs directory."""
+    checkpoints = sorted(output_dir.glob("theory_denoiser_*.pt"))
+    return checkpoints[-1] if checkpoints else None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate a saved TheoryDenoiserNet checkpoint.")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=CHECKPOINT_PATH,
+        help="Path to the .pt checkpoint file (default: latest in outputs/).",
+    )
+    parser.add_argument("--num_theories", type=int, default=100,
+                        help="Number of theories per phase (default: 100).")
+    parser.add_argument("--max_steps", type=int, default=None,
+                        help="Max denoising steps (default: NUM_TIMESTEPS from checkpoint config).")
+    args = parser.parse_args()
+
+    # ── Locate checkpoint ─────────────────────────────────────────────────────
+    ckpt_path = Path(args.checkpoint) if args.checkpoint else find_latest_checkpoint(Path("outputs"))
+    if ckpt_path is None or not ckpt_path.exists():
+        print("ERROR: No checkpoint found. Run main.py first or pass --checkpoint <path>.")
+        sys.exit(1)
+
+    print(f"Loading checkpoint: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = ckpt["config"]
+
+    N           = cfg["N_LITERALS"]
+    M           = cfg["M_CLAUSES"]
+    K           = cfg["K_STATES"]
+    T           = cfg["NUM_TIMESTEPS"]
+    max_steps   = args.max_steps if args.max_steps is not None else T
+
+    print(f"Config: N={N}  M={M}  K={K}  T={T}  max_steps={max_steps}")
+
+    device = torch.device("cpu")
+
+    # ── Rebuild model and corruption process ──────────────────────────────────
+    model = TheoryDenoiserNet(N=N, M=M, num_classes=K, num_timesteps=T)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.to(device)
+    model.eval()
+
+    corrupt = D3PMForwardCorruption(num_classes=K, num_timesteps=T)
+    corrupt.to(device)
+
+    # ── Phase 1: in-distribution theories (same-sign per literal) ────────────
+    print(f"\nGenerating {args.num_theories} in-distribution theories (same-sign, N={N}, max_clauses={M})...")
+    phase1_theories = [generate_same_sign_theory(N, M) for _ in range(args.num_theories)]
+
+    run_phase(
+        phase_name="Phase 1 – In-distribution (same-sign per literal, as in training)",
+        theories=phase1_theories,
+        model=model,
+        corrupt=corrupt,
+        max_steps=max_steps,
+        device=device,
+    )
+
+    # ── Phase 2: out-of-distribution theories (mixed signs) ──────────────────
+    print(f"\nGenerating {args.num_theories} out-of-distribution theories (mixed-sign, N={N}, max_clauses={M})...")
+    phase2_theories = [generate_mixed_sign_theory(N, M) for _ in range(args.num_theories)]
+
+    run_phase(
+        phase_name="Phase 2 – Out-of-distribution (mixed signs across clauses)",
+        theories=phase2_theories,
+        model=model,
+        corrupt=corrupt,
+        max_steps=max_steps,
+        device=device,
+    )
+
+    # ── Save results ──────────────────────────────────────────────────────────
+    from datetime import datetime
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = Path("outputs") / f"test_results_{run_id}.txt"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Re-run and capture to file by redirecting stdout
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        run_phase(
+            phase_name="Phase 1 – In-distribution (same-sign per literal, as in training)",
+            theories=phase1_theories,
+            model=model,
+            corrupt=corrupt,
+            max_steps=max_steps,
+            device=device,
+        )
+        run_phase(
+            phase_name="Phase 2 – Out-of-distribution (mixed signs across clauses)",
+            theories=phase2_theories,
+            model=model,
+            corrupt=corrupt,
+            max_steps=max_steps,
+            device=device,
+        )
+
+    log_path.write_text(buf.getvalue(), encoding="utf-8")
+    print(f"\nResults saved to: {log_path}")
+
+
+if __name__ == "__main__":
+    main()
+
