@@ -1,0 +1,3 @@
+double check diffusion implementation
+more variety in data set generation
+    generalization performance, in terms of theory size and variety

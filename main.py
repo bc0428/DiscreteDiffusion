@@ -211,7 +211,9 @@ class D3PMForwardCorruption(nn.Module):
         batch_size = x_0.size(0)
         device = x_0.device
 
-        t = torch.randint(0, self.num_timesteps, (batch_size,), device=device).long()
+        # Sample t uniformly from [1, T).
+        # t=0 means x_t == x_0 (no noise), so the model trivially memorises — excluded.
+        t = torch.randint(1, self.num_timesteps, (batch_size,), device=device).long()
         x_t = self.q_sample(x_0, t, clause_mask=clause_mask)
         predicted_logits = model(x_t, t, clause_mask=clause_mask)
 
@@ -411,7 +413,7 @@ if __name__ == "__main__":
     NUM_SAMPLES = 1000
     BATCH_SIZE = 16
     TRAIN_RATIO = 0.8
-    EPOCHS = 1000
+    EPOCHS = 100
     LR = 1e-4
     NUM_TIMESTEPS = 1000
     SANITY_CHECK_LIMIT = 200
