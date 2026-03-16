@@ -248,7 +248,7 @@ class D3PMForwardCorruption(nn.Module):
 # Neural Network Architecture (The Denoiser)
 # ==========================================
 class TheoryDenoiserNet(nn.Module):
-    def __init__(self, N, M, num_classes=3, d_model=128, num_timesteps=1000):
+    def __init__(self, N, M, num_classes=3, d_model=32, num_timesteps=1000):
         super().__init__()
         self.N = N
         self.M = M
