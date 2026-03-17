@@ -154,6 +154,13 @@ def get_dataloaders(num_samples: int, N: int, max_clauses: int,
 
 
 def resolve_curriculum_max_clauses(epoch: int, stages: list[tuple[int, int]], default_max: int) -> int:
+    """
+    return curriculum maximum clauses.
+    :param epoch:
+    :param stages:
+    :param default_max:
+    :return:
+    """
     active = default_max
     for start_epoch, stage_max in stages:
         if epoch >= start_epoch:
@@ -169,17 +176,20 @@ def get_uniform_transition_matrix(beta, num_classes=3):
 
 
 class D3PMForwardCorruption(nn.Module):
-    def __init__(self, num_classes=3, num_timesteps=1000):
+    def __init__(self, num_classes=3, num_timesteps=1000, lambda_aux=0.001):
         super().__init__()
         self.num_classes = num_classes
         self.num_timesteps = num_timesteps
+        self.lambda_aux = lambda_aux
 
         scale = 1000 / num_timesteps
         betas = torch.linspace(scale * 1e-4, scale * 0.02, num_timesteps)
 
         Q_one_step_mats = []
         bar_Q_t = torch.eye(num_classes)
-        Q_bars = []
+        # Index 0 = identity (t=0, clean data); index t = Q_1 * ... * Q_t.
+        # This fixes an off-by-one: previously Q_bar_mats[t] contained t+1 noise steps.
+        Q_bars = [torch.eye(num_classes)]
 
         for beta in betas:
             Q_t = get_uniform_transition_matrix(beta)
@@ -188,9 +198,17 @@ class D3PMForwardCorruption(nn.Module):
             Q_bars.append(bar_Q_t)
 
         self.register_buffer('Q_one_step_mats', torch.stack(Q_one_step_mats))
+        # Shape: (T+1, K, K).  Q_bar_mats[t] = cumulative product of exactly t one-step matrices.
         self.register_buffer('Q_bar_mats', torch.stack(Q_bars))
 
     def q_sample(self, x_0, t, clause_mask=None):
+        """
+        sample x_t given t, x_0
+        :param x_0:
+        :param t:
+        :param clause_mask:
+        :return:
+        """
         batch_size, N, M = x_0.shape
         bar_Q_t = self.Q_bar_mats[t]
 
@@ -207,6 +225,74 @@ class D3PMForwardCorruption(nn.Module):
 
         return x_t
 
+    def q_posterior_probs(self, x_0: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the TRUE forward posterior q(x_{t-1} | x_t, x_0) per cell.
+
+        Derivation (Bayes on the Markov chain x_0 → x_{t-1} → x_t):
+            q(x_{t-1} | x_t, x_0)  ∝  q(x_t | x_{t-1}) · q(x_{t-1} | x_0)
+                                     =  Q_t[x_{t-1}, x_t]  ·  Q̄_{t-1}[x_0, x_{t-1}]
+
+        Args:
+            x_0: (batch, N, M) – clean theory labels
+            x_t: (batch, N, M) – noisy theory labels at timestep t
+            t:   (batch,)      – integer timestep per sample, values in [1, T)
+
+        Returns:
+            (batch, N, M, K) probability tensor (sums to 1 over the last dim).
+        """
+        # One-step matrix Q_t for each sample: Q_one_step_mats is 0-indexed so index (t-1).
+        Q_t = self.Q_one_step_mats[t - 1]       # (batch, K, K)
+        # Cumulative matrix Q̄_{t-1}: index (t-1) in Q_bar_mats where index 0 = Identity.
+        Q_bar_tm1 = self.Q_bar_mats[t - 1]      # (batch, K, K)  Identity when t=1
+
+        x_t_oh = F.one_hot(x_t, num_classes=self.num_classes).float()   # (batch, N, M, K)
+        x_0_oh = F.one_hot(x_0, num_classes=self.num_classes).float()   # (batch, N, M, K)
+
+        # Q_t_col[b,n,m,j] = Q_t[b, j, x_t[b,n,m]]  — prob of transitioning FROM j TO x_t
+        Q_t_col = torch.einsum('bjk,bnmk->bnmj', Q_t, x_t_oh)           # (batch, N, M, K)
+
+        # Q_bar_row[b,n,m,j] = Q̄_{t-1}[b, x_0[b,n,m], j]  — prob of reaching j from x_0 in t-1 steps
+        Q_bar_row = torch.einsum('bnmi,bij->bnmj', x_0_oh, Q_bar_tm1)   # (batch, N, M, K)
+
+        q_unnorm = Q_t_col * Q_bar_row
+        return q_unnorm / q_unnorm.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+    def p_theta_posterior_probs(self, x_0_logits: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the MODEL posterior p_θ(x_{t-1} | x_t) per cell.
+
+        The model predicts a distribution over x_0; we then marginalise using the joint:
+            p_θ(x_{t-1} | x_t) = Σ_{x_0'} q(x_{t-1}, x_t | x_0') · p_θ(x_0' | x_t)
+
+        Because q(x_{t-1}, x_t | x_0') is linear in x_0', the sum collapses to:
+            p_θ(x_{t-1} | x_t) ∝ Q_t[:, x_t]  ⊙  (p_θ(x_0 | x_t) @ Q̄_{t-1})
+
+        Args:
+            x_0_logits: (batch, N, M, K) – raw logits from the model for x_0
+            x_t:        (batch, N, M)    – noisy theory at timestep t
+            t:          (batch,)         – integer timestep per sample
+
+        Returns:
+            (batch, N, M, K) probability tensor.
+        """
+        p_x0 = F.softmax(x_0_logits, dim=-1)                            # (batch, N, M, K)
+
+        Q_t = self.Q_one_step_mats[t - 1]                               # (batch, K, K)
+        Q_bar_tm1 = self.Q_bar_mats[t - 1]                              # (batch, K, K)
+
+        x_t_oh = F.one_hot(x_t, num_classes=self.num_classes).float()   # (batch, N, M, K)
+
+        # Same column of Q_t as in the true posterior
+        Q_t_col = torch.einsum('bjk,bnmk->bnmj', Q_t, x_t_oh)          # (batch, N, M, K)
+
+        # Weighted mixture of rows of Q̄_{t-1}, weighted by p_θ(x_0 | x_t)
+        # result[b,n,m,j] = Σ_c p_x0[b,n,m,c] · Q̄_{t-1}[b,c,j]
+        Q_bar_weighted = torch.einsum('bnmc,bcj->bnmj', p_x0, Q_bar_tm1)  # (batch, N, M, K)
+
+        p_unnorm = Q_t_col * Q_bar_weighted
+        return p_unnorm / p_unnorm.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
     def compute_batch_stats(self, model, x_0, clause_mask):
         batch_size = x_0.size(0)
         device = x_0.device
@@ -217,13 +303,32 @@ class D3PMForwardCorruption(nn.Module):
         x_t = self.q_sample(x_0, t, clause_mask=clause_mask)
         predicted_logits = model(x_t, t, clause_mask=clause_mask)
 
+        # ── VLB term: KL( q(x_{t-1}|x_t,x_0) ‖ p_θ(x_{t-1}|x_t) ) ──────────
+        # This is the main D3PM objective.  For t=1 it naturally reduces to the
+        # reconstruction CE because q(x_0 | x_1, x_0) is a delta at x_0.
+        q_post = self.q_posterior_probs(x_0, x_t, t)                      # (batch, N, M, K)
+        p_post = self.p_theta_posterior_probs(predicted_logits, x_t, t)   # (batch, N, M, K)
+
+        kl_per_cell = (
+            q_post * (q_post.clamp_min(1e-12).log() - p_post.clamp_min(1e-12).log())
+        ).sum(dim=-1)  # (batch, N, M)
+
+        # ── Auxiliary CE term: -log p_θ(x_0 | x_t) ───────────────────────────
+        # Encourages the model to directly predict the clean theory; stabilises training.
         ce_per_cell = F.cross_entropy(
             predicted_logits.permute(0, 3, 1, 2),
             x_0,
             reduction='none'
-        )
+        )  # (batch, N, M)
+
         valid_cell_mask = clause_mask.unsqueeze(1).expand_as(ce_per_cell).float()
-        loss = (ce_per_cell * valid_cell_mask).sum() / valid_cell_mask.sum().clamp_min(1.0)
+        total_valid = valid_cell_mask.sum().clamp_min(1.0)
+
+        kl_loss = (kl_per_cell * valid_cell_mask).sum() / total_valid
+        ce_loss = (ce_per_cell * valid_cell_mask).sum() / total_valid
+
+        # Full D3PM loss = L_VLB + λ · L_aux
+        loss = kl_loss + self.lambda_aux * ce_loss
 
         predicted_x0 = predicted_logits.argmax(dim=-1)
 
@@ -235,6 +340,8 @@ class D3PMForwardCorruption(nn.Module):
 
         return {
             "loss": loss,
+            "kl_loss": kl_loss,
+            "ce_loss": ce_loss,
             "predicted_x0": predicted_x0,
             "consistent_count": consistent_count,
             "batch_size": batch_size,
@@ -349,6 +456,8 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
         model.eval()
 
     total_loss = 0.0
+    total_kl_loss = 0.0
+    total_ce_loss = 0.0
     consistent_count = 0
     total_count = 0
 
@@ -361,6 +470,8 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
             optimizer.step()
 
             total_loss += loss.item()
+            total_kl_loss += batch_stats["kl_loss"].item()
+            total_ce_loss += batch_stats["ce_loss"].item()
             # For training, we can keep the fast 1-shot metric just to monitor progress
             consistent_count += batch_stats["consistent_count"]
             total_count += batch_stats["batch_size"]
@@ -370,6 +481,8 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
                 batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
                 loss = batch_stats["loss"]
                 total_loss += loss.item()
+                total_kl_loss += batch_stats["kl_loss"].item()
+                total_ce_loss += batch_stats["ce_loss"].item()
 
                 # 2. Evaluate true generation quality iteratively using Re-Noising
                 batch_size = x_0.size(0)
@@ -398,8 +511,10 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
                 total_count += batch_size
 
     avg_loss = total_loss / len(dataloader)
+    avg_kl = total_kl_loss / len(dataloader)
+    avg_ce = total_ce_loss / len(dataloader)
     consistency_rate = 100.0 * consistent_count / total_count if total_count else 0.0
-    return avg_loss, consistent_count, total_count, consistency_rate
+    return avg_loss, avg_kl, avg_ce, consistent_count, total_count, consistency_rate
 
 
 # ==========================================
@@ -482,14 +597,14 @@ if __name__ == "__main__":
             emit(f"  Train batches : {len(train_loader)}  ({train_count} theories)")
             emit(f"  Test  batches : {len(test_loader)}  ({test_count} theories)")
 
-        train_loss, train_consistent, train_total, train_consistency = run_epoch(
+        train_loss, train_kl, train_ce, train_consistent, train_total, train_consistency = run_epoch(
             model=model,
             corrupt=corrupt,
             dataloader=train_loader,
             optimizer=optimizer,
         )
 
-        test_loss, test_consistent, test_total, test_consistency = run_epoch(
+        test_loss, test_kl, test_ce, test_consistent, test_total, test_consistency = run_epoch(
             model=model,
             corrupt=corrupt,
             dataloader=test_loader,
@@ -499,9 +614,9 @@ if __name__ == "__main__":
         emit(
             f"Epoch {epoch:>3}/{EPOCHS} | "
             f"Stage max M: {current_stage_max} | "
-            f"Train Loss: {train_loss:.4f} | "
+            f"Train Loss: {train_loss:.4f} (KL {train_kl:.4f} CE {train_ce:.4f}) | "
             f"Train Consistent: {train_consistent}/{train_total} ({train_consistency:.1f}%) | "
-            f"Test Loss: {test_loss:.4f} | "
+            f"Test Loss: {test_loss:.4f} (KL {test_kl:.4f} CE {test_ce:.4f}) | "
             f"Test Consistent: {test_consistent}/{test_total} ({test_consistency:.1f}%)"
         )
 
