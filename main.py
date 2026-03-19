@@ -75,29 +75,52 @@ def is_consistent(theory: torch.Tensor) -> bool:
 
 def generate_consistent_theory(N: int, max_clauses: int) -> torch.Tensor:
     """
-    Generate one consistent theory with variable clause length.
+    Generate one consistent theory using the Planted Solution method.
+    Randomizes both the number of clauses AND the number of active variables,
+    leaving unused variable rows as entirely 0.
     """
     if max_clauses <= 0:
         raise ValueError("max_clauses must be >= 1")
 
-    while True:
-        theory = torch.zeros(N, max_clauses, dtype=torch.long)
+    num_clauses = torch.randint(1, max_clauses + 1, (1,)).item()
+    # num_clauses = max_clauses
+    theory = torch.zeros((N, num_clauses), dtype=torch.long)
 
-        for i in range(N):
-            polarity = torch.randint(0, 3, (1,)).item()  # 0=absent, 1=pos-only, 2=neg-only
-            if polarity == 0:
-                continue
-            if polarity == 1:
-                theory[i] = torch.randint(0, 2, (max_clauses,))  # {0,1}
-            else:
-                theory[i] = torch.randint(0, 2, (max_clauses,)) * 2  # {0,2}
+    # 1. Randomize the number of ACTIVE variables (from 1 to N)
+    num_vars = torch.randint(1, N + 1, (1,)).item()
 
-        # Step 4: drop empty columns
-        non_empty_cols = (theory != 0).any(dim=0)
-        kept = theory[:, non_empty_cols]
+    # 2. Pick exactly WHICH variables are active in this theory
+    active_vars = torch.randperm(N)[:num_vars]
 
-        if kept.size(1) > 0:
-            return kept
+    # 3. Generate a master truth assignment for all N variables
+    # (We only actually care about the values for the active_vars)
+    master_assignment = torch.randint(0, 2, (N,), dtype=torch.bool)
+
+    for j in range(num_clauses):
+        # 4. Clause size L is bounded by the number of ACTIVE variables
+        L = torch.randint(1, num_vars + 1, (1,)).item()
+
+        # 5. Pick L distinct variables strictly from the ACTIVE pool
+        # Shuffle the active_vars array and take the first L elements
+        clause_vars = active_vars[torch.randperm(num_vars)[:L]]
+
+        # 6. Pick k (number of True evaluating literals in this clause)
+        k = torch.randint(1, L + 1, (1,)).item()
+
+        # Split into True evaluating and False evaluating variables
+        true_vars = clause_vars[:k]
+        false_vars = clause_vars[k:]
+
+        # 7. Apply polarities based on the master assignment
+        for v in true_vars:
+            # Match master assignment to evaluate to True
+            theory[v, j] = 1 if master_assignment[v] else 2
+
+        for v in false_vars:
+            # Invert master assignment to evaluate to False
+            theory[v, j] = 2 if master_assignment[v] else 1
+
+    return theory
 
 
 def generate_dataset(num_samples: int, N: int, max_clauses: int) -> list[torch.Tensor]:
