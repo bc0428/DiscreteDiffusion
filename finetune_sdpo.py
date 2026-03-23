@@ -29,12 +29,12 @@ from main import (
 # ==========================================
 # IDE Configuration Block
 # ==========================================
-CHECKPOINT_PATH = "outputs/theory_denoiser_20260319_122658.pt"  # <-- UPDATE THIS
+CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"  # <-- UPDATE THIS
 EPOCHS = 10
 LR = 1e-5
-BETA = 0.1
+BETA = 0.01
 LAMBDA_CONSIST = 1.0
-LAMBDA_DIFF = 0.5
+LAMBDA_DIFF = 1.0
 
 
 def compute_reward(x_0_pred: torch.Tensor, x_0_orig: torch.Tensor, clause_mask: torch.Tensor,

@@ -1,0 +1,121 @@
+
+============================================================
+  Evaluation – Consistent theories from generate_consistent_theory
+  100 theories  |  max denoising steps: 1000
+============================================================
+  [   1] OK steps= 561  total_change= 49.23%  empty_change= +20.00%
+  [   2] OK steps= 572  total_change= 69.33%  empty_change= +41.33%
+  [   3] OK steps= 245  total_change= 53.33%  empty_change= +33.33%
+  [   4] OK steps= 310  total_change= 55.00%  empty_change= +20.00%
+  [   5] OK steps= 503  total_change= 20.00%  empty_change= +12.50%
+  [   6] OK steps= 446  total_change= 56.92%  empty_change= +33.85%
+  [   7] OK steps= 472  total_change= 40.00%  empty_change=  +0.00%
+  [   8] OK steps= 316  total_change= 52.00%  empty_change= +12.00%
+  [   9] OK steps= 568  total_change= 26.25%  empty_change= +13.75%
+  [  10] OK steps=  63  total_change= 80.00%  empty_change= +40.00%
+  [  11] OK steps= 578  total_change= 54.74%  empty_change= +27.37%
+  [  12] OK steps= 424  total_change= 25.71%  empty_change=  +8.57%
+  [  13] OK steps= 237  total_change= 46.67%  empty_change= +26.67%
+  [  14] OK steps=  55  total_change= 40.00%  empty_change=  +0.00%
+  [  15] OK steps= 275  total_change= 40.00%  empty_change=  +0.00%
+  [  16] OK steps= 104  total_change= 40.00%  empty_change=  +0.00%
+  [  17] OK steps= 494  total_change= 60.00%  empty_change= +20.00%
+  [  18] OK steps= 269  total_change= 50.00%  empty_change= +10.00%
+  [  19] OK steps=  27  total_change= 40.00%  empty_change=  +0.00%
+  [  20] OK steps=  43  total_change= 50.00%  empty_change= +10.00%
+  [  21] OK steps= 293  total_change= 70.00%  empty_change= +40.00%
+  [  22] OK steps= 579  total_change= 56.67%  empty_change= +36.67%
+  [  23] OK steps=  27  total_change= 20.00%  empty_change=  +0.00%
+  [  24] OK steps= 582  total_change= 45.88%  empty_change= +27.06%
+  [  25] OK steps= 483  total_change= 24.44%  empty_change=  +6.67%
+  [  26] OK steps= 538  total_change= 52.63%  empty_change= +27.37%
+  [  27] OK steps= 438  total_change= 82.86%  empty_change= +42.86%
+  [  28] OK steps= 358  total_change= 46.67%  empty_change=  +6.67%
+  [  29] OK steps= 394  total_change= 42.22%  empty_change= +24.44%
+  [  30] OK steps= 228  total_change= 45.00%  empty_change=  +5.00%
+  [  31] OK steps= 442  total_change= 53.33%  empty_change= +13.33%
+  [  32] OK steps= 475  total_change= 40.00%  empty_change=  +0.00%
+  [  33] OK steps= 433  total_change= 46.67%  empty_change= +16.67%
+  [  34] OK steps= 497  total_change= 35.56%  empty_change= +13.33%
+  [  35] OK steps= 425  total_change= 37.14%  empty_change= +17.14%
+  [  36] OK steps= 417  total_change= 62.86%  empty_change= +37.14%
+  [  37] OK steps= 547  total_change= 65.00%  empty_change= +25.00%
+  [  38] OK steps= 437  total_change= 40.00%  empty_change=  +0.00%
+  [  39] OK steps= 587  total_change= 67.50%  empty_change= +37.50%
+  [  40] OK steps= 537  total_change= 61.67%  empty_change= +21.67%
+  [  41] OK steps= 265  total_change= 86.67%  empty_change= +46.67%
+  [  42] OK steps= 314  total_change= 40.00%  empty_change=  +0.00%
+  [  43] OK steps= 553  total_change= 46.32%  empty_change=  +6.32%
+  [  44] OK steps=  96  total_change= 80.00%  empty_change= +60.00%
+  [  45] OK steps= 587  total_change= 53.75%  empty_change= +13.75%
+  [  46] OK steps= 436  total_change= 62.50%  empty_change= +42.50%
+  [  47] OK steps= 292  total_change= 56.00%  empty_change= +16.00%
+  [  48] OK steps= 134  total_change= 40.00%  empty_change= +26.67%
+  [  49] OK steps= 549  total_change= 30.67%  empty_change= +10.67%
+  [  50] OK steps= 386  total_change= 54.29%  empty_change= +45.71%
+  [  51] OK steps= 522  total_change= 40.00%  empty_change=  +0.00%
+  [  52] OK steps= 370  total_change= 51.43%  empty_change= +31.43%
+  [  53] OK steps= 245  total_change= 40.00%  empty_change=  +0.00%
+  [  54] OK steps= 344  total_change= 40.00%  empty_change= +28.00%
+  [  55] OK steps= 218  total_change= 52.00%  empty_change= +28.00%
+  [  56] OK steps= 478  total_change= 31.25%  empty_change= +11.25%
+  [  57] OK steps= 551  total_change= 42.00%  empty_change= +22.00%
+  [  58] OK steps= 540  total_change= 40.00%  empty_change=  +0.00%
+  [  59] OK steps= 439  total_change= 63.64%  empty_change= +23.64%
+  [  60] OK steps= 497  total_change=  0.00%  empty_change=  +0.00%
+  [  61] OK steps= 364  total_change= 33.33%  empty_change= +20.00%
+  [  62] OK steps=  22  total_change= 50.00%  empty_change= +10.00%
+  [  63] OK steps= 152  total_change= 70.00%  empty_change= +40.00%
+  [  64] OK steps= 568  total_change= 45.00%  empty_change= +22.50%
+  [  65] OK steps= 453  total_change= 38.57%  empty_change= +27.14%
+  [  66] OK steps= 297  total_change= 60.00%  empty_change= +40.00%
+  [  67] OK steps= 405  total_change= 45.71%  empty_change= +22.86%
+  [  68] OK steps= 423  total_change= 40.00%  empty_change=  +0.00%
+  [  69] OK steps=  41  total_change= 40.00%  empty_change=  +0.00%
+  [  70] OK steps= 557  total_change= 40.00%  empty_change=  +0.00%
+  [  71] OK steps= 577  total_change= 63.53%  empty_change= +43.53%
+  [  72] OK steps= 542  total_change= 63.75%  empty_change= +38.75%
+  [  73] OK steps= 504  total_change= 48.33%  empty_change=  +8.33%
+  [  74] OK steps= 139  total_change= 50.00%  empty_change= +20.00%
+  [  75] OK steps= 320  total_change= 40.00%  empty_change=  +0.00%
+  [  76] OK steps= 520  total_change= 41.18%  empty_change=  -1.18%
+  [  77] OK steps= 406  total_change= 46.67%  empty_change=  +6.67%
+  [  78] OK steps= 256  total_change= 20.00%  empty_change=  +0.00%
+  [  79] OK steps= 509  total_change= 43.64%  empty_change= +14.55%
+  [  80] OK steps=  10  total_change= 40.00%  empty_change=  +0.00%
+  [  81] OK steps= 502  total_change= 37.33%  empty_change= +25.33%
+  [  82] OK steps= 466  total_change= 67.06%  empty_change= +27.06%
+  [  83] OK steps= 109  total_change= 66.67%  empty_change= +46.67%
+  [  84] OK steps= 186  total_change= 50.00%  empty_change= +10.00%
+  [  85] OK steps= 486  total_change= 40.00%  empty_change=  +0.00%
+  [  86] OK steps=   6  total_change= 40.00%  empty_change=  +0.00%
+  [  87] OK steps= 548  total_change= 56.00%  empty_change= +16.00%
+  [  88] OK steps= 182  total_change= 32.00%  empty_change= +12.00%
+  [  89] OK steps= 493  total_change= 21.00%  empty_change= +14.00%
+  [  90] OK steps=   5  total_change= 60.00%  empty_change= +20.00%
+  [  91] OK steps=  92  total_change= 40.00%  empty_change= +20.00%
+  [  92] OK steps= 145  total_change= 40.00%  empty_change=  +0.00%
+  [  93] OK steps= 539  total_change= 44.00%  empty_change= +17.33%
+  [  94] OK steps= 407  total_change= 45.00%  empty_change=  +5.00%
+  [  95] OK steps= 509  total_change= 60.00%  empty_change= +40.00%
+  [  96] OK steps= 528  total_change= 30.59%  empty_change=  +9.41%
+  [  97] OK steps=   1  total_change= 80.00%  empty_change= +40.00%
+  [  98] OK steps= 337  total_change= 20.00%  empty_change= +16.00%
+  [  99] OK steps= 346  total_change= 55.00%  empty_change= +15.00%
+  [ 100] OK steps= 458  total_change= 31.67%  empty_change= +10.00%
+
+  -- Summary ---------------------------------------------
+  Metric 1 - Revision percentages (original vs final)
+    Total change % : mean=47.32%  std=15.08%
+    Empty change % : mean=+17.97%  std=14.91%
+    (positive empty change => more empty cells in final output)
+
+  Metric 2 – Denoising steps to first consistent theory
+    Evaluated on 100/100 theories that reached consistency
+    Mean : 365.1  Std : 178.4  (out of 1000 max steps)
+    (lower is better; model converged faster)
+
+  Metric 3 – Consistency rate
+    100 / 100 = 100.0%
+    (higher is better)
+============================================================
