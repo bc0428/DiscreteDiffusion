@@ -5,9 +5,12 @@ Optimizes RL reward parameters and learning rate for the D3PM Theory Denoiser
 using Bayesian Optimization (Optuna).
 
 Target Metric: Maximize the Consistency Success Rate.
+Reports: Total edits, and empty cell percentages before and after revision.
 """
 
 import os
+import csv
+from datetime import datetime
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
@@ -30,20 +33,17 @@ from main import (
 # Tuning Configuration
 # ==========================================
 CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
-EPOCHS_PER_TRIAL = 5  # Keep this low to iterate quickly
+EPOCHS_PER_TRIAL = 20  # Keep this low to iterate quickly
 NUM_ROLLOUTS_PER_EPOCH = 16  # Reduced for faster trial evaluation
 N_TRIALS = 50  # Total number of hyperparameter combinations to test
 
 
 def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
-    """
-    Your optimized rollout logic, adapted to accept dynamic parameters from Optuna.
-    """
     model.train()
     try:
         _, clause_mask = next(iter(dataloader))
     except StopIteration:
-        return 0, 0, 0
+        return 0, 0, 0, 0.0, 0.0, 0.0
 
     batch_size = clause_mask.size(0)
     clause_mask = clause_mask.to(device)
@@ -51,6 +51,10 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
 
     x_t = torch.randint(0, model.num_classes, (batch_size, model.N, clause_mask.size(1)), device=device)
     x_t = x_t.masked_fill(~clause_mask.unsqueeze(1), 0)
+
+    # Track states for our new metrics
+    x_initial = x_t.clone()
+    x_final = torch.zeros_like(x_t)
 
     active_mask = torch.ones(batch_size, dtype=torch.bool, device=device)
 
@@ -87,6 +91,9 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
                 if not active_mask[b]:
                     continue
 
+                # Continuously update x_final to the most recent prediction
+                x_final[b] = x_0_pred[b].clone()
+
                 r = 0
                 active_theory = x_0_pred[b, :, clause_mask[b]].detach().cpu()
 
@@ -101,23 +108,34 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
 
             x_t = x_t_minus_1
 
+    # ── METRIC CALCULATION: Total and Empty Changes ──
+    # Calculate the total number of valid cells for each theory in the batch
+    valid_cells = (valid_mask_float.sum(dim=(1, 2)) * model.N).clamp_min(1.0)
+
+    changed_cells = ((x_initial != x_final) * valid_mask_float).sum(dim=(1, 2))
+    empty_before_cells = ((x_initial == 0) * valid_mask_float).sum(dim=(1, 2))
+    empty_after_cells = ((x_final == 0) * valid_mask_float).sum(dim=(1, 2))
+
+    total_change_pct = (changed_cells / valid_cells).mean().item() * 100.0
+    empty_pct_before = (empty_before_cells / valid_cells).mean().item() * 100.0
+    empty_pct_after = (empty_after_cells / valid_cells).mean().item() * 100.0
+
     # ── PHASE 2: CALCULATE RETURNS ──
     all_returns = []
     batch_returns_lists = []
 
     for b in range(batch_size):
-        # G = 0.0
-        returns = []
-        # for r in reversed(traj_rewards[b]):
-        #     G = r + params['gamma'] * G
-        #     returns.insert(0, G)
-        returns.insert(0, sum(traj_rewards[b]))  # Total return at the start of the episode
+        # FIX: Ensure the undiscounted return applies to every step in the trajectory
+        # so `b_step_indices` doesn't throw an IndexError during backprop
+        total_episode_return = sum(traj_rewards[b])
+        returns = [total_episode_return for _ in traj_rewards[b]]
+
         batch_returns_lists.append(returns)
         if returns:
             all_returns.extend(returns)
 
     if not all_returns:
-        return 0.0, 0, 0.0
+        return 0.0, 0, 0.0, total_change_pct, empty_pct_before, empty_pct_after
 
     baseline = sum(all_returns) / len(all_returns)
 
@@ -154,15 +172,10 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
-    return total_policy_loss_val, (hits / batch_size) * 100, baseline
+    return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after
 
 
 def objective(trial):
-    """
-    The Optuna objective function. Suggests parameters, runs a short training loop,
-    and returns the final success rate.
-    """
-    # 1. Define the Search Space
     params = {
         'lr': trial.suggest_float('lr', 1e-6, 5e-5, log=True),
         'step_cost': 1.0,
@@ -174,7 +187,6 @@ def objective(trial):
     ckpt = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
 
-    # 2. Initialize a Fresh Model for this Trial
     model = TheoryDenoiserNet(N=cfg["N_LITERALS"], M=cfg["M_CLAUSES"], num_classes=cfg["K_STATES"],
                               num_timesteps=cfg["NUM_TIMESTEPS"])
     model.load_state_dict(ckpt["model_state_dict"])
@@ -190,24 +202,46 @@ def objective(trial):
         batch_size=cfg["BATCH_SIZE"], train_ratio=1.0
     )
 
-    # 3. Mini Training Loop
     final_success_rate = 0.0
+    final_chg = 0.0
+    final_e_bef = 0.0
+    final_e_aft = 0.0
 
+    print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-        epoch_sr = 0.0
+        epoch_sr, epoch_chg, epoch_e_bef, epoch_e_aft = 0.0, 0.0, 0.0, 0.0
+
         for _ in range(NUM_ROLLOUTS_PER_EPOCH):
-            _, sr, _ = run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
+            _, sr, _, chg, e_bef, e_aft = run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
             epoch_sr += sr
+            epoch_chg += chg
+            epoch_e_bef += e_bef
+            epoch_e_aft += e_aft
 
         avg_epoch_sr = epoch_sr / NUM_ROLLOUTS_PER_EPOCH
-        final_success_rate = avg_epoch_sr
+        avg_chg = epoch_chg / NUM_ROLLOUTS_PER_EPOCH
+        avg_e_bef = epoch_e_bef / NUM_ROLLOUTS_PER_EPOCH
+        avg_e_aft = epoch_e_aft / NUM_ROLLOUTS_PER_EPOCH
 
-        # Report intermediate values to Optuna for pruning
+        final_success_rate = avg_epoch_sr
+        final_chg = avg_chg
+        final_e_bef = avg_e_bef
+        final_e_aft = avg_e_aft
+
+        print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | SR: {avg_epoch_sr:.1f}% | Total Edit: {avg_chg:.1f}% | Empty Bef: {avg_e_bef:.1f}% -> Aft: {avg_e_aft:.1f}%")
+
         trial.report(avg_epoch_sr, epoch)
         if trial.should_prune():
+            print("Trial Pruned.")
             raise optuna.exceptions.TrialPruned()
 
-    # Free up VRAM before the next trial starts
+    # Report custom metrics to Optuna so you can view them later
+    final_net_change = final_e_aft - final_e_bef
+    trial.set_user_attr("Total Change %", final_chg)
+    trial.set_user_attr("Empty % Before", final_e_bef)
+    trial.set_user_attr("Empty % After", final_e_aft)
+    trial.set_user_attr("Net Empty Change %", final_net_change)
+
     del model
     del optimizer
     torch.cuda.empty_cache()
@@ -218,7 +252,6 @@ def objective(trial):
 def main():
     print("Starting Bayesian Hyperparameter Optimization...")
 
-    # Create an Optuna study that maximizes the success rate
     study = optuna.create_study(
         direction="maximize",
         pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
@@ -226,13 +259,65 @@ def main():
 
     study.optimize(objective, n_trials=N_TRIALS)
 
+    # Build a complete per-trial view so manual comparison is easy.
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"hyperparam_trials_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+    rows = []
+    for tr in study.trials:
+        rows.append({
+            "trial": tr.number,
+            "state": str(tr.state),
+            "value": tr.value,
+            "lr": tr.params.get("lr"),
+            "massive_reward": tr.params.get("massive_reward"),
+            "early_finish_bonus": tr.params.get("early_finish_bonus"),
+            "total_change_pct": tr.user_attrs.get("Total Change %"),
+            "empty_before_pct": tr.user_attrs.get("Empty % Before"),
+            "empty_after_pct": tr.user_attrs.get("Empty % After"),
+            "net_empty_change_pct": tr.user_attrs.get("Net Empty Change %"),
+        })
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            "trial", "state", "value", "lr", "massive_reward", "early_finish_bonus",
+            "total_change_pct", "empty_before_pct", "empty_after_pct", "net_empty_change_pct"
+        ])
+        writer.writeheader()
+        writer.writerows(rows)
+
     print("\n" + "=" * 50)
     print("OPTIMIZATION FINISHED")
-    print(f"Best Trial: #{study.best_trial.number}")
-    print(f"Best Success Rate: {study.best_value:.2f}%")
-    print("Best Parameters:")
-    for key, value in study.best_trial.params.items():
-        print(f"  {key}: {value}")
+    print("All Trial Results (for manual review):")
+    print("Trial | State | SR(%) | lr | massive_reward | early_finish_bonus | TotalChange(%) | EmptyBefore(%) | EmptyAfter(%) | NetEmpty(%)")
+    for r in rows:
+        sr = "-" if r["value"] is None else f"{r['value']:.2f}"
+        lr = "-" if r["lr"] is None else f"{r['lr']:.2e}"
+        mr = "-" if r["massive_reward"] is None else f"{r['massive_reward']:.1f}"
+        eb = "-" if r["early_finish_bonus"] is None else f"{r['early_finish_bonus']:.1f}"
+        tc = "-" if r["total_change_pct"] is None else f"{r['total_change_pct']:.2f}"
+        e0 = "-" if r["empty_before_pct"] is None else f"{r['empty_before_pct']:.2f}"
+        e1 = "-" if r["empty_after_pct"] is None else f"{r['empty_after_pct']:.2f}"
+        ne = "-" if r["net_empty_change_pct"] is None else f"{r['net_empty_change_pct']:+.2f}"
+        print(
+            f"{r['trial']:>5} | {r['state']:<7} | {sr:>6} | {lr:>10} | {mr:>14} | {eb:>17} | {tc:>13} | {e0:>14} | {e1:>13} | {ne:>10}"
+        )
+
+    print(f"\nSaved full trial table to: {csv_path}")
+
+    if study.best_trial is not None:
+        print(f"Best Trial: #{study.best_trial.number}")
+        print(f"Best Success Rate: {study.best_value:.2f}%")
+        print("Best Parameters:")
+        for key, value in study.best_trial.params.items():
+            print(f"  {key}: {value}")
+
+        print("Metrics for Best Trial:")
+        print(f"  Total Change:  {study.best_trial.user_attrs.get('Total Change %', 0):.2f}%")
+        print(f"  Empty Before:  {study.best_trial.user_attrs.get('Empty % Before', 0):.2f}%")
+        print(f"  Empty After:   {study.best_trial.user_attrs.get('Empty % After', 0):.2f}%")
+        print(f"  Net Change:    {study.best_trial.user_attrs.get('Net Empty Change %', 0):+.2f}%")
 
 
 if __name__ == "__main__":
