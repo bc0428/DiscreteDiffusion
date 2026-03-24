@@ -38,12 +38,18 @@ NUM_ROLLOUTS_PER_EPOCH = 16  # Reduced for faster trial evaluation
 N_TRIALS = 50  # Total number of hyperparameter combinations to test
 
 
-def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
-    model.train()
-    try:
-        _, clause_mask = next(iter(dataloader))
-    except StopIteration:
-        return 0, 0, 0, 0.0, 0.0, 0.0
+def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, update_model=True, clause_mask_batch=None):
+    if update_model:
+        model.train()
+    else:
+        model.eval()
+    if clause_mask_batch is not None:
+        clause_mask = clause_mask_batch
+    else:
+        try:
+            _, clause_mask = next(iter(dataloader))
+        except StopIteration:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
 
     batch_size = clause_mask.size(0)
     clause_mask = clause_mask.to(device)
@@ -135,21 +141,25 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
             all_returns.extend(returns)
 
     if not all_returns:
-        return 0.0, 0, 0.0, total_change_pct, empty_pct_before, empty_pct_after
+        return 0.0, 0.0, 0.0, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
     baseline = sum(all_returns) / len(all_returns)
 
     # ── PHASE 3: STEP-WISE BACKPROPAGATION ──
+    if not update_model:
+        return 0.0, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
+
     optimizer.zero_grad()
     total_policy_loss_val = 0.0
     b_step_indices = [0 for _ in range(batch_size)]
+    use_amp = device.type == "cuda"
 
     for trans in saved_transitions:
         active_curr = trans['active_mask']
         if not active_curr.any():
             continue
 
-        with autocast(device_type='cuda', dtype=torch.bfloat16):
+        with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
             logits = model(trans['x_t'], trans['t_tensor'], clause_mask=clause_mask)
             dist = torch.distributions.Categorical(logits=logits)
             step_log_probs = (dist.log_prob(trans['x_0_pred']) * valid_mask_float).sum(dim=(1, 2))
@@ -172,7 +182,7 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params):
     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optimizer.step()
 
-    return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after
+    return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
 
 def objective(trial):
@@ -196,44 +206,61 @@ def objective(trial):
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
 
     final_max_clauses = resolve_curriculum_max_clauses(999, cfg["CURRICULUM_STAGES"], cfg["M_CLAUSES"])
-    train_loader, _, _ = get_dataloaders(
+    train_loader, test_loader, _ = get_dataloaders(
         num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
         N=cfg["N_LITERALS"], max_clauses=final_max_clauses,
-        batch_size=cfg["BATCH_SIZE"], train_ratio=1.0
+        batch_size=cfg["BATCH_SIZE"], train_ratio=0.8
     )
 
-    final_success_rate = 0.0
-    final_chg = 0.0
-    final_e_bef = 0.0
-    final_e_aft = 0.0
 
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-        epoch_sr, epoch_chg, epoch_e_bef, epoch_e_aft = 0.0, 0.0, 0.0, 0.0
-
+        # Train on train split for this hyperparameter config.
         for _ in range(NUM_ROLLOUTS_PER_EPOCH):
-            _, sr, _, chg, e_bef, e_aft = run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
-            epoch_sr += sr
-            epoch_chg += chg
-            epoch_e_bef += e_bef
-            epoch_e_aft += e_aft
+            run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
 
-        avg_epoch_sr = epoch_sr / NUM_ROLLOUTS_PER_EPOCH
-        avg_chg = epoch_chg / NUM_ROLLOUTS_PER_EPOCH
-        avg_e_bef = epoch_e_bef / NUM_ROLLOUTS_PER_EPOCH
-        avg_e_aft = epoch_e_aft / NUM_ROLLOUTS_PER_EPOCH
+        print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
-        final_success_rate = avg_epoch_sr
-        final_chg = avg_chg
-        final_e_bef = avg_e_bef
-        final_e_aft = avg_e_aft
+    # Evaluate once on the entire test split after full training for this trial.
+    test_weighted_sr = 0.0
+    test_weighted_chg = 0.0
+    test_weighted_e_bef = 0.0
+    test_weighted_e_aft = 0.0
+    test_total_samples = 0
 
-        print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | SR: {avg_epoch_sr:.1f}% | Total Edit: {avg_chg:.1f}% | Empty Bef: {avg_e_bef:.1f}% -> Aft: {avg_e_aft:.1f}%")
+    with torch.no_grad():
+        for _, clause_mask in test_loader:
+            _, sr, _, chg, e_bef, e_aft, bsz = run_tuning_rollouts(
+                model,
+                corrupt,
+                dataloader=None,
+                optimizer=None,
+                device=device,
+                params=params,
+                update_model=False,
+                clause_mask_batch=clause_mask,
+            )
+            if bsz == 0:
+                continue
+            test_weighted_sr += sr * bsz
+            test_weighted_chg += chg * bsz
+            test_weighted_e_bef += e_bef * bsz
+            test_weighted_e_aft += e_aft * bsz
+            test_total_samples += bsz
 
-        trial.report(avg_epoch_sr, epoch)
-        if trial.should_prune():
-            print("Trial Pruned.")
-            raise optuna.exceptions.TrialPruned()
+    denom = max(test_total_samples, 1)
+    final_success_rate = test_weighted_sr / denom
+    final_chg = test_weighted_chg / denom
+    final_e_bef = test_weighted_e_bef / denom
+    final_e_aft = test_weighted_e_aft / denom
+
+    print(
+        f"Final TEST | SR: {final_success_rate:.1f}% | "
+        f"Total Edit: {final_chg:.1f}% | Empty: {final_e_bef:.1f}% -> {final_e_aft:.1f}%"
+    )
+
+    # Single report at the end because test is evaluated once post-training.
+    trial.report(final_success_rate, EPOCHS_PER_TRIAL)
 
     # Report custom metrics to Optuna so you can view them later
     final_net_change = final_e_aft - final_e_bef
