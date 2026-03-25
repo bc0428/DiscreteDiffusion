@@ -113,9 +113,14 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
                     time_saved_pct = (t_step - 1) / model.num_timesteps
                     gross_reward = params['massive_reward'] + (params['early_finish_bonus'] * time_saved_pct)
 
-                    # 2. Terminal Edit Tax
+                    # 2. Terminal Edit Tax (Normalized to Percentage)
+                    valid_cells_b = valid_mask_float[b].sum().item() * model.N
                     total_changes = ((x_initial[b] != x_0_pred[b]) * valid_mask_float[b]).sum().item()
-                    edit_tax = params['change_penalty'] * total_changes
+
+                    # Calculate the percentage of the theory that was altered (0.0 to 100.0)
+                    change_pct = (total_changes / max(1.0, valid_cells_b)) * 100.0
+
+                    edit_tax = params['change_penalty'] * change_pct
 
                     # 3. Final Net Reward
                     r = gross_reward - edit_tax
