@@ -2,10 +2,12 @@
 tune_rl_hyperparams.py
 ======================
 Optimizes RL reward parameters and learning rate for the D3PM Theory Denoiser
-using Bayesian Optimization (Optuna).
+using Multi-Objective Bayesian Optimization (Optuna).
 
-Target Metric: Maximize the Consistency Success Rate.
-Reports: Total edits, and empty cell percentages before and after revision.
+Target Metrics:
+1. Maximize Consistency Success Rate
+2. Minimize Total Change Percentage
+3. Minimize Absolute Net Empty Change
 """
 
 import os
@@ -34,9 +36,9 @@ from main import (
 # Tuning Configuration
 # ==========================================
 CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
-EPOCHS_PER_TRIAL = 20  # Keep this low to iterate quickly
-NUM_ROLLOUTS_PER_EPOCH = 16  # Reduced for faster trial evaluation
-N_TRIALS = 50  # Total number of hyperparameter combinations to test
+EPOCHS_PER_TRIAL = 20
+NUM_ROLLOUTS_PER_EPOCH = 16
+N_TRIALS = 50
 
 
 def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, update_model=True, clause_mask_batch=None):
@@ -44,6 +46,7 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
         model.train()
     else:
         model.eval()
+
     if clause_mask_batch is not None:
         clause_mask = clause_mask_batch
     else:
@@ -59,7 +62,7 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
     x_t = torch.randint(0, model.num_classes, (batch_size, model.N, clause_mask.size(1)), device=device)
     x_t = x_t.masked_fill(~clause_mask.unsqueeze(1), 0)
 
-    # Track states for our new metrics
+    # Track states for our metrics and terminal rewards
     x_initial = x_t.clone()
     x_final = torch.zeros_like(x_t)
 
@@ -101,22 +104,30 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
                 # Continuously update x_final to the most recent prediction
                 x_final[b] = x_0_pred[b].clone()
 
-                r = 0
+                r = 0.0
                 active_theory = x_0_pred[b, :, clause_mask[b]].detach().cpu()
 
+                # Terminal Reward Logic
                 if active_theory.numel() > 0 and is_consistent(active_theory):
-                    r = params['massive_reward'] + (params['early_finish_bonus'] * (t_step - 1))
+                    # 1. Base Payout & Speed Bonus (Normalized to 0.0 - 1.0)
+                    time_saved_pct = (t_step - 1) / model.num_timesteps
+                    gross_reward = params['massive_reward'] + (params['early_finish_bonus'] * time_saved_pct)
+
+                    # 2. Terminal Edit Tax
+                    total_changes = ((x_initial[b] != x_0_pred[b]) * valid_mask_float[b]).sum().item()
+                    edit_tax = params['change_penalty'] * total_changes
+
+                    # 3. Final Net Reward
+                    r = gross_reward - edit_tax
+
                     active_mask[b] = False
                     hits += 1
 
-                changes = ((x_t[b] != x_t_minus_1[b]) * valid_mask_float[b]).sum().item()
-                r += - (params['step_cost'] * changes)
                 traj_rewards[b].append(r)
 
             x_t = x_t_minus_1
 
     # ── METRIC CALCULATION: Total and Empty Changes ──
-    # Calculate the total number of valid cells for each theory in the batch
     valid_cells = (valid_mask_float.sum(dim=(1, 2)) * model.N).clamp_min(1.0)
 
     changed_cells = ((x_initial != x_final) * valid_mask_float).sum(dim=(1, 2))
@@ -132,8 +143,6 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
     batch_returns_lists = []
 
     for b in range(batch_size):
-        # FIX: Ensure the undiscounted return applies to every step in the trajectory
-        # so `b_step_indices` doesn't throw an IndexError during backprop
         total_episode_return = sum(traj_rewards[b])
         returns = [total_episode_return for _ in traj_rewards[b]]
 
@@ -189,9 +198,9 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
 def objective(trial):
     params = {
         'lr': trial.suggest_float('lr', 1e-6, 5e-5, log=True),
-        'step_cost': 1.0,
-        'massive_reward': trial.suggest_float('massive_reward', 50.0, 300.0, step=50.0),
-        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 1.0, 10.0, step=3.0),
+        'change_penalty': trial.suggest_float('change_penalty', 0.5, 5.0),
+        'massive_reward': trial.suggest_float('massive_reward', 50.0, 200.0),
+        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 50.0),
     }
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -213,17 +222,12 @@ def objective(trial):
         batch_size=cfg["BATCH_SIZE"], train_ratio=0.8
     )
 
-
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-        # Train on train split for this hyperparameter config.
         for _ in range(NUM_ROLLOUTS_PER_EPOCH):
             run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
-
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
-    # Evaluate once on the entire test split after full training for this trial.
-    # Build metric lists first, then compute mean/std from the same lists.
     test_sr_list = []
     test_chg_list = []
     test_e_bef_list = []
@@ -265,6 +269,8 @@ def objective(trial):
     final_e_aft, final_e_aft_std = mean_std(test_e_aft_list)
     final_net_change, final_net_std = mean_std(test_net_list)
 
+    abs_empty_change = abs(final_net_change)
+
     print(
         f"Final TEST | SR: {final_success_rate:.1f} +/- {final_sr_std:.1f}% | "
         f"Total Edit: {final_chg:.1f} +/- {final_chg_std:.1f}% | "
@@ -272,10 +278,6 @@ def objective(trial):
         f"Net: {final_net_change:+.1f} +/- {final_net_std:.1f}%"
     )
 
-    # Single report at the end because test is evaluated once post-training.
-    trial.report(final_success_rate, EPOCHS_PER_TRIAL)
-
-    # Report custom metrics to Optuna so you can view them later
     trial.set_user_attr("Success Rate Std %", final_sr_std)
     trial.set_user_attr("Total Change %", final_chg)
     trial.set_user_attr("Total Change Std %", final_chg_std)
@@ -290,31 +292,35 @@ def objective(trial):
     del optimizer
     torch.cuda.empty_cache()
 
-    return final_success_rate
+    # Optuna will: Maximize SR, Minimize Total Change, Minimize Absolute Empty Change
+    return final_success_rate, final_chg, abs_empty_change
 
 
 def main():
-    print("Starting Bayesian Hyperparameter Optimization...")
+    print("Starting Multi-Objective Bayesian Hyperparameter Optimization...")
 
+    # Multi-objective study: directions map directly to the returned tuple
     study = optuna.create_study(
-        direction="maximize",
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
+        directions=["maximize", "minimize", "minimize"]
     )
 
     study.optimize(objective, n_trials=N_TRIALS)
 
-    # Build a complete per-trial view so manual comparison is easy.
     output_dir = Path("outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / f"hyperparam_trials_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
     rows = []
     for tr in study.trials:
+        # For multi-objective, tr.values is a list rather than a single tr.value
+        sr_val = tr.values[0] if tr.values else None
+
         rows.append({
             "trial": tr.number,
             "state": str(tr.state),
-            "value": tr.value,
+            "value": sr_val, # Keeping the primary metric here for backward compatibility with your CSV
             "lr": tr.params.get("lr"),
+            "change_penalty": tr.params.get("change_penalty"),
             "massive_reward": tr.params.get("massive_reward"),
             "early_finish_bonus": tr.params.get("early_finish_bonus"),
             "success_rate_std_pct": tr.user_attrs.get("Success Rate Std %"),
@@ -330,7 +336,7 @@ def main():
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
-            "trial", "state", "value", "lr", "massive_reward", "early_finish_bonus",
+            "trial", "state", "value", "lr", "change_penalty", "massive_reward", "early_finish_bonus",
             "success_rate_std_pct",
             "total_change_pct", "total_change_std_pct",
             "empty_before_pct", "empty_before_std_pct",
@@ -342,51 +348,23 @@ def main():
 
     print("\n" + "=" * 50)
     print("OPTIMIZATION FINISHED")
-    print("All Trial Results (for manual review):")
-    print("Trial | State | SR(mean+/-std) | lr | massive_reward | early_finish_bonus | TotalChange(mean+/-std) | EmptyBefore(mean+/-std) | EmptyAfter(mean+/-std) | Net(mean+/-std)")
-    for r in rows:
-        sr_std = r["success_rate_std_pct"]
-        sr = "-" if r["value"] is None else f"{r['value']:.2f}+/-{(0.0 if sr_std is None else sr_std):.2f}"
-        lr = "-" if r["lr"] is None else f"{r['lr']:.2e}"
-        mr = "-" if r["massive_reward"] is None else f"{r['massive_reward']:.1f}"
-        eb = "-" if r["early_finish_bonus"] is None else f"{r['early_finish_bonus']:.1f}"
-        tc = "-" if r["total_change_pct"] is None else f"{r['total_change_pct']:.2f}+/-{(0.0 if r['total_change_std_pct'] is None else r['total_change_std_pct']):.2f}"
-        e0 = "-" if r["empty_before_pct"] is None else f"{r['empty_before_pct']:.2f}+/-{(0.0 if r['empty_before_std_pct'] is None else r['empty_before_std_pct']):.2f}"
-        e1 = "-" if r["empty_after_pct"] is None else f"{r['empty_after_pct']:.2f}+/-{(0.0 if r['empty_after_std_pct'] is None else r['empty_after_std_pct']):.2f}"
-        ne = "-" if r["net_empty_change_pct"] is None else f"{r['net_empty_change_pct']:+.2f}+/-{(0.0 if r['net_empty_change_std_pct'] is None else r['net_empty_change_std_pct']):.2f}"
-        print(
-            f"{r['trial']:>5} | {r['state']:<7} | {sr:>6} | {lr:>10} | {mr:>14} | {eb:>17} | {tc:>13} | {e0:>14} | {e1:>13} | {ne:>10}"
-        )
-
     print(f"\nSaved full trial table to: {csv_path}")
 
-    if study.best_trial is not None:
-        print(f"Best Trial: #{study.best_trial.number}")
-        print(
-            f"Best Success Rate: {study.best_value:.2f} +/- "
-            f"{study.best_trial.user_attrs.get('Success Rate Std %', 0):.2f}%"
-        )
-        print("Best Parameters:")
-        for key, value in study.best_trial.params.items():
-            print(f"  {key}: {value}")
+    print("\n--- Pareto Front (Best Trade-off Trials) ---")
+    best_trials = study.best_trials
 
-        print("Metrics for Best Trial:")
-        print(
-            f"  Total Change:  {study.best_trial.user_attrs.get('Total Change %', 0):.2f} +/- "
-            f"{study.best_trial.user_attrs.get('Total Change Std %', 0):.2f}%"
-        )
-        print(
-            f"  Empty Before:  {study.best_trial.user_attrs.get('Empty % Before', 0):.2f} +/- "
-            f"{study.best_trial.user_attrs.get('Empty % Before Std', 0):.2f}%"
-        )
-        print(
-            f"  Empty After:   {study.best_trial.user_attrs.get('Empty % After', 0):.2f} +/- "
-            f"{study.best_trial.user_attrs.get('Empty % After Std', 0):.2f}%"
-        )
-        print(
-            f"  Net Change:    {study.best_trial.user_attrs.get('Net Empty Change %', 0):+.2f} +/- "
-            f"{study.best_trial.user_attrs.get('Net Empty Change Std %', 0):.2f}%"
-        )
+    if not best_trials:
+        print("No Pareto front found.")
+        return
+
+    for i, t in enumerate(best_trials):
+        print(f"\nPareto Option #{i+1} (Trial {t.number}):")
+        print(f"  Success Rate:  {t.values[0]:.2f}%")
+        print(f"  Total Change:  {t.values[1]:.2f}%")
+        print(f"  Net Empty Chg: {t.values[2]:.2f}% (Absolute)")
+        print("  Parameters:")
+        for key, value in t.params.items():
+            print(f"    {key}: {value:.5f}" if isinstance(value, float) else f"    {key}: {value}")
 
 
 if __name__ == "__main__":
