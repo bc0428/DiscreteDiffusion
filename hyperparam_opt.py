@@ -10,6 +10,7 @@ Reports: Total edits, and empty cell percentages before and after revision.
 
 import os
 import csv
+import math
 from datetime import datetime
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -222,11 +223,12 @@ def objective(trial):
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
     # Evaluate once on the entire test split after full training for this trial.
-    test_weighted_sr = 0.0
-    test_weighted_chg = 0.0
-    test_weighted_e_bef = 0.0
-    test_weighted_e_aft = 0.0
-    test_total_samples = 0
+    # Build metric lists first, then compute mean/std from the same lists.
+    test_sr_list = []
+    test_chg_list = []
+    test_e_bef_list = []
+    test_e_aft_list = []
+    test_net_list = []
 
     with torch.no_grad():
         for _, clause_mask in test_loader:
@@ -242,32 +244,47 @@ def objective(trial):
             )
             if bsz == 0:
                 continue
-            test_weighted_sr += sr * bsz
-            test_weighted_chg += chg * bsz
-            test_weighted_e_bef += e_bef * bsz
-            test_weighted_e_aft += e_aft * bsz
-            test_total_samples += bsz
+            test_sr_list.append(sr)
+            test_chg_list.append(chg)
+            test_e_bef_list.append(e_bef)
+            test_e_aft_list.append(e_aft)
+            test_net_list.append(e_aft - e_bef)
 
-    denom = max(test_total_samples, 1)
-    final_success_rate = test_weighted_sr / denom
-    final_chg = test_weighted_chg / denom
-    final_e_bef = test_weighted_e_bef / denom
-    final_e_aft = test_weighted_e_aft / denom
+    def mean_std(values):
+        if not values:
+            return 0.0, 0.0
+        mean = sum(values) / len(values)
+        if len(values) == 1:
+            return mean, 0.0
+        var = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
+        return mean, math.sqrt(var)
+
+    final_success_rate, final_sr_std = mean_std(test_sr_list)
+    final_chg, final_chg_std = mean_std(test_chg_list)
+    final_e_bef, final_e_bef_std = mean_std(test_e_bef_list)
+    final_e_aft, final_e_aft_std = mean_std(test_e_aft_list)
+    final_net_change, final_net_std = mean_std(test_net_list)
 
     print(
-        f"Final TEST | SR: {final_success_rate:.1f}% | "
-        f"Total Edit: {final_chg:.1f}% | Empty: {final_e_bef:.1f}% -> {final_e_aft:.1f}%"
+        f"Final TEST | SR: {final_success_rate:.1f} +/- {final_sr_std:.1f}% | "
+        f"Total Edit: {final_chg:.1f} +/- {final_chg_std:.1f}% | "
+        f"Empty: {final_e_bef:.1f} +/- {final_e_bef_std:.1f}% -> {final_e_aft:.1f} +/- {final_e_aft_std:.1f}% | "
+        f"Net: {final_net_change:+.1f} +/- {final_net_std:.1f}%"
     )
 
     # Single report at the end because test is evaluated once post-training.
     trial.report(final_success_rate, EPOCHS_PER_TRIAL)
 
     # Report custom metrics to Optuna so you can view them later
-    final_net_change = final_e_aft - final_e_bef
+    trial.set_user_attr("Success Rate Std %", final_sr_std)
     trial.set_user_attr("Total Change %", final_chg)
+    trial.set_user_attr("Total Change Std %", final_chg_std)
     trial.set_user_attr("Empty % Before", final_e_bef)
+    trial.set_user_attr("Empty % Before Std", final_e_bef_std)
     trial.set_user_attr("Empty % After", final_e_aft)
+    trial.set_user_attr("Empty % After Std", final_e_aft_std)
     trial.set_user_attr("Net Empty Change %", final_net_change)
+    trial.set_user_attr("Net Empty Change Std %", final_net_std)
 
     del model
     del optimizer
@@ -300,16 +317,25 @@ def main():
             "lr": tr.params.get("lr"),
             "massive_reward": tr.params.get("massive_reward"),
             "early_finish_bonus": tr.params.get("early_finish_bonus"),
+            "success_rate_std_pct": tr.user_attrs.get("Success Rate Std %"),
             "total_change_pct": tr.user_attrs.get("Total Change %"),
+            "total_change_std_pct": tr.user_attrs.get("Total Change Std %"),
             "empty_before_pct": tr.user_attrs.get("Empty % Before"),
+            "empty_before_std_pct": tr.user_attrs.get("Empty % Before Std"),
             "empty_after_pct": tr.user_attrs.get("Empty % After"),
+            "empty_after_std_pct": tr.user_attrs.get("Empty % After Std"),
             "net_empty_change_pct": tr.user_attrs.get("Net Empty Change %"),
+            "net_empty_change_std_pct": tr.user_attrs.get("Net Empty Change Std %"),
         })
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "trial", "state", "value", "lr", "massive_reward", "early_finish_bonus",
-            "total_change_pct", "empty_before_pct", "empty_after_pct", "net_empty_change_pct"
+            "success_rate_std_pct",
+            "total_change_pct", "total_change_std_pct",
+            "empty_before_pct", "empty_before_std_pct",
+            "empty_after_pct", "empty_after_std_pct",
+            "net_empty_change_pct", "net_empty_change_std_pct"
         ])
         writer.writeheader()
         writer.writerows(rows)
@@ -317,16 +343,17 @@ def main():
     print("\n" + "=" * 50)
     print("OPTIMIZATION FINISHED")
     print("All Trial Results (for manual review):")
-    print("Trial | State | SR(%) | lr | massive_reward | early_finish_bonus | TotalChange(%) | EmptyBefore(%) | EmptyAfter(%) | NetEmpty(%)")
+    print("Trial | State | SR(mean+/-std) | lr | massive_reward | early_finish_bonus | TotalChange(mean+/-std) | EmptyBefore(mean+/-std) | EmptyAfter(mean+/-std) | Net(mean+/-std)")
     for r in rows:
-        sr = "-" if r["value"] is None else f"{r['value']:.2f}"
+        sr_std = r["success_rate_std_pct"]
+        sr = "-" if r["value"] is None else f"{r['value']:.2f}+/-{(0.0 if sr_std is None else sr_std):.2f}"
         lr = "-" if r["lr"] is None else f"{r['lr']:.2e}"
         mr = "-" if r["massive_reward"] is None else f"{r['massive_reward']:.1f}"
         eb = "-" if r["early_finish_bonus"] is None else f"{r['early_finish_bonus']:.1f}"
-        tc = "-" if r["total_change_pct"] is None else f"{r['total_change_pct']:.2f}"
-        e0 = "-" if r["empty_before_pct"] is None else f"{r['empty_before_pct']:.2f}"
-        e1 = "-" if r["empty_after_pct"] is None else f"{r['empty_after_pct']:.2f}"
-        ne = "-" if r["net_empty_change_pct"] is None else f"{r['net_empty_change_pct']:+.2f}"
+        tc = "-" if r["total_change_pct"] is None else f"{r['total_change_pct']:.2f}+/-{(0.0 if r['total_change_std_pct'] is None else r['total_change_std_pct']):.2f}"
+        e0 = "-" if r["empty_before_pct"] is None else f"{r['empty_before_pct']:.2f}+/-{(0.0 if r['empty_before_std_pct'] is None else r['empty_before_std_pct']):.2f}"
+        e1 = "-" if r["empty_after_pct"] is None else f"{r['empty_after_pct']:.2f}+/-{(0.0 if r['empty_after_std_pct'] is None else r['empty_after_std_pct']):.2f}"
+        ne = "-" if r["net_empty_change_pct"] is None else f"{r['net_empty_change_pct']:+.2f}+/-{(0.0 if r['net_empty_change_std_pct'] is None else r['net_empty_change_std_pct']):.2f}"
         print(
             f"{r['trial']:>5} | {r['state']:<7} | {sr:>6} | {lr:>10} | {mr:>14} | {eb:>17} | {tc:>13} | {e0:>14} | {e1:>13} | {ne:>10}"
         )
@@ -335,16 +362,31 @@ def main():
 
     if study.best_trial is not None:
         print(f"Best Trial: #{study.best_trial.number}")
-        print(f"Best Success Rate: {study.best_value:.2f}%")
+        print(
+            f"Best Success Rate: {study.best_value:.2f} +/- "
+            f"{study.best_trial.user_attrs.get('Success Rate Std %', 0):.2f}%"
+        )
         print("Best Parameters:")
         for key, value in study.best_trial.params.items():
             print(f"  {key}: {value}")
 
         print("Metrics for Best Trial:")
-        print(f"  Total Change:  {study.best_trial.user_attrs.get('Total Change %', 0):.2f}%")
-        print(f"  Empty Before:  {study.best_trial.user_attrs.get('Empty % Before', 0):.2f}%")
-        print(f"  Empty After:   {study.best_trial.user_attrs.get('Empty % After', 0):.2f}%")
-        print(f"  Net Change:    {study.best_trial.user_attrs.get('Net Empty Change %', 0):+.2f}%")
+        print(
+            f"  Total Change:  {study.best_trial.user_attrs.get('Total Change %', 0):.2f} +/- "
+            f"{study.best_trial.user_attrs.get('Total Change Std %', 0):.2f}%"
+        )
+        print(
+            f"  Empty Before:  {study.best_trial.user_attrs.get('Empty % Before', 0):.2f} +/- "
+            f"{study.best_trial.user_attrs.get('Empty % Before Std', 0):.2f}%"
+        )
+        print(
+            f"  Empty After:   {study.best_trial.user_attrs.get('Empty % After', 0):.2f} +/- "
+            f"{study.best_trial.user_attrs.get('Empty % After Std', 0):.2f}%"
+        )
+        print(
+            f"  Net Change:    {study.best_trial.user_attrs.get('Net Empty Change %', 0):+.2f} +/- "
+            f"{study.best_trial.user_attrs.get('Net Empty Change Std %', 0):.2f}%"
+        )
 
 
 if __name__ == "__main__":
