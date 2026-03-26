@@ -1,0 +1,53 @@
+
+--- Starting RL Fine-tuning ---
+RL Hyperparams: LR=2.95e-05, CHANGE_PENALTY=1.91, MASSIVE_REWARD=116, EARLY_FINISH_BONUS=44
+Epoch   1/40 | Tr SR: 100.0±0.0 % (Loss: -452.442, Edit: 65.6±1.9 %, NetEmpty: +21.1±2.1 %) | Val SR: 100.0±0.0 % (Edit: 66.6±3.5 %, Empty: 33.1%->56.5%)
+Epoch   2/40 | Tr SR: 100.0±0.0 % (Loss: -896.290, Edit: 66.0±1.4 %, NetEmpty: +22.5±2.4 %) | Val SR: 100.0±0.0 % (Edit: 64.9±3.7 %, Empty: 34.5%->56.0%)
+Epoch   3/40 | Tr SR: 100.0±0.0 % (Loss: -307.268, Edit: 66.7±2.1 %, NetEmpty: +21.5±3.8 %) | Val SR: 100.0±0.0 % (Edit: 66.6±5.1 %, Empty: 32.1%->54.6%)
+Epoch   4/40 | Tr SR: 100.0±0.0 % (Loss: -563.309, Edit: 66.5±1.9 %, NetEmpty: +20.1±1.9 %) | Val SR: 100.0±0.0 % (Edit: 66.9±1.7 %, Empty: 32.1%->53.3%)
+Epoch   5/40 | Tr SR: 100.0±0.0 % (Loss: -477.566, Edit: 66.1±2.6 %, NetEmpty: +21.1±4.3 %) | Val SR: 100.0±0.0 % (Edit: 64.6±2.7 %, Empty: 34.7%->54.6%)
+Epoch   6/40 | Tr SR: 100.0±0.0 % (Loss: -530.019, Edit: 66.4±1.9 %, NetEmpty: +21.0±3.0 %) | Val SR: 100.0±0.0 % (Edit: 64.9±4.7 %, Empty: 32.9%->52.3%)
+Epoch   7/40 | Tr SR: 100.0±0.0 % (Loss: 65.587, Edit: 66.7±1.7 %, NetEmpty: +20.1±2.4 %) | Val SR: 100.0±0.0 % (Edit: 65.7±1.2 %, Empty: 32.4%->55.6%)
+Epoch   8/40 | Tr SR: 100.0±0.0 % (Loss: -178.924, Edit: 65.0±2.3 %, NetEmpty: +19.3±3.2 %) | Val SR: 100.0±0.0 % (Edit: 67.3±2.0 %, Empty: 32.5%->50.4%)
+Epoch   9/40 | Tr SR: 100.0±0.0 % (Loss:  3.299, Edit: 67.4±1.4 %, NetEmpty: +16.6±2.2 %) | Val SR: 100.0±0.0 % (Edit: 64.9±2.0 %, Empty: 32.7%->49.0%)
+Epoch  10/40 | Tr SR: 100.0±0.0 % (Loss: -44.928, Edit: 66.2±2.1 %, NetEmpty: +17.2±2.7 %) | Val SR: 100.0±0.0 % (Edit: 65.1±4.0 %, Empty: 34.6%->50.9%)
+Epoch  11/40 | Tr SR: 100.0±0.0 % (Loss: -92.404, Edit: 64.5±3.1 %, NetEmpty: +14.9±2.4 %) | Val SR: 100.0±0.0 % (Edit: 67.1±2.5 %, Empty: 34.2%->49.2%)
+Epoch  12/40 | Tr SR: 100.0±0.0 % (Loss: -110.050, Edit: 65.3±2.1 %, NetEmpty: +15.6±3.4 %) | Val SR: 100.0±0.0 % (Edit: 62.3±1.7 %, Empty: 30.7%->50.0%)
+Epoch  13/40 | Tr SR: 100.0±0.0 % (Loss: -34.507, Edit: 66.1±1.3 %, NetEmpty: +14.9±3.3 %) | Val SR: 100.0±0.0 % (Edit: 66.5±4.3 %, Empty: 32.8%->48.4%)
+Epoch  14/40 | Tr SR: 100.0±0.0 % (Loss: -109.822, Edit: 65.6±2.0 %, NetEmpty: +13.1±2.5 %) | Val SR: 100.0±0.0 % (Edit: 64.9±1.3 %, Empty: 33.0%->48.0%)
+Epoch  15/40 | Tr SR: 100.0±0.0 % (Loss: -171.667, Edit: 64.5±1.6 %, NetEmpty: +13.2±2.0 %) | Val SR: 100.0±0.0 % (Edit: 65.3±0.9 %, Empty: 33.5%->48.1%)
+Epoch  16/40 | Tr SR: 100.0±0.0 % (Loss: -290.461, Edit: 64.2±2.6 %, NetEmpty: +13.9±3.0 %) | Val SR: 100.0±0.0 % (Edit: 60.5±3.2 %, Empty: 34.5%->46.1%)
+Epoch  17/40 | Tr SR: 100.0±0.0 % (Loss: -209.105, Edit: 64.0±1.8 %, NetEmpty: +10.4±2.4 %) | Val SR: 100.0±0.0 % (Edit: 64.0±3.1 %, Empty: 33.6%->42.7%)
+Epoch  18/40 | Tr SR: 100.0±0.0 % (Loss: -266.997, Edit: 61.8±3.2 %, NetEmpty: +8.9±2.3 %) | Val SR: 100.0±0.0 % (Edit: 57.8±4.2 %, Empty: 36.7%->43.0%)
+Epoch  19/40 | Tr SR: 100.0±0.0 % (Loss: -302.987, Edit: 59.8±2.6 %, NetEmpty: +5.8±3.9 %) | Val SR: 100.0±0.0 % (Edit: 58.4±3.6 %, Empty: 31.9%->32.3%)
+Epoch  20/40 | Tr SR: 100.0±0.0 % (Loss: -184.828, Edit: 58.4±2.7 %, NetEmpty: -2.9±2.9 %) | Val SR: 100.0±0.0 % (Edit: 55.2±1.9 %, Empty: 33.7%->28.2%)
+Epoch  21/40 | Tr SR: 100.0±0.0 % (Loss: -169.188, Edit: 56.2±2.4 %, NetEmpty: -4.8±3.2 %) | Val SR: 100.0±0.0 % (Edit: 56.8±3.9 %, Empty: 33.2%->23.1%)
+Epoch  22/40 | Tr SR: 100.0±0.0 % (Loss: -126.544, Edit: 55.5±2.0 %, NetEmpty: -9.7±2.1 %) | Val SR: 100.0±0.0 % (Edit: 54.5±2.0 %, Empty: 33.5%->20.1%)
+Epoch  23/40 | Tr SR: 100.0±0.0 % (Loss: -163.726, Edit: 53.1±1.8 %, NetEmpty: -8.0±3.8 %) | Val SR: 100.0±0.0 % (Edit: 49.2±4.6 %, Empty: 35.5%->31.8%)
+Epoch  24/40 | Tr SR: 100.0±0.0 % (Loss: -178.450, Edit: 53.2±1.3 %, NetEmpty: -4.2±2.2 %) | Val SR: 100.0±0.0 % (Edit: 51.8±4.6 %, Empty: 33.2%->31.4%)
+Epoch  25/40 | Tr SR: 100.0±0.0 % (Loss: -233.845, Edit: 51.2±2.1 %, NetEmpty: -2.2±2.1 %) | Val SR: 100.0±0.0 % (Edit: 48.2±3.7 %, Empty: 35.5%->31.1%)
+Epoch  26/40 | Tr SR: 100.0±0.0 % (Loss: -206.759, Edit: 50.7±2.6 %, NetEmpty: -5.4±3.2 %) | Val SR: 100.0±0.0 % (Edit: 47.8±3.5 %, Empty: 33.7%->26.5%)
+Epoch  27/40 | Tr SR: 100.0±0.0 % (Loss: -199.657, Edit: 50.2±3.7 %, NetEmpty: -7.4±3.4 %) | Val SR: 100.0±0.0 % (Edit: 47.7±3.8 %, Empty: 32.5%->24.5%)
+Epoch  28/40 | Tr SR: 100.0±0.0 % (Loss: -174.032, Edit: 49.0±3.1 %, NetEmpty: -7.7±2.3 %) | Val SR: 100.0±0.0 % (Edit: 45.2±3.1 %, Empty: 32.8%->22.6%)
+Epoch  29/40 | Tr SR: 100.0±0.0 % (Loss: -255.676, Edit: 47.4±2.9 %, NetEmpty: -8.7±2.1 %) | Val SR: 100.0±0.0 % (Edit: 44.7±2.6 %, Empty: 33.6%->26.3%)
+Epoch  30/40 | Tr SR: 100.0±0.0 % (Loss: -102.373, Edit: 48.2±1.7 %, NetEmpty: -5.9±1.8 %) | Val SR: 100.0±0.0 % (Edit: 45.9±2.3 %, Empty: 34.9%->29.8%)
+Epoch  31/40 | Tr SR: 100.0±0.0 % (Loss: -175.141, Edit: 46.1±1.7 %, NetEmpty: -2.5±2.4 %) | Val SR: 100.0±0.0 % (Edit: 45.3±1.7 %, Empty: 34.1%->35.8%)
+Epoch  32/40 | Tr SR: 100.0±0.0 % (Loss: -169.125, Edit: 46.8±2.7 %, NetEmpty: +0.4±3.2 %) | Val SR: 100.0±0.0 % (Edit: 40.9±4.4 %, Empty: 32.4%->36.5%)
+Epoch  33/40 | Tr SR: 100.0±0.0 % (Loss: -198.596, Edit: 48.4±3.4 %, NetEmpty: +2.1±2.5 %) | Val SR: 100.0±0.0 % (Edit: 45.8±6.2 %, Empty: 34.0%->35.9%)
+Epoch  34/40 | Tr SR: 100.0±0.0 % (Loss: -237.254, Edit: 46.6±3.3 %, NetEmpty: +0.2±2.3 %) | Val SR: 100.0±0.0 % (Edit: 43.0±3.7 %, Empty: 31.9%->31.3%)
+Epoch  35/40 | Tr SR: 100.0±0.0 % (Loss: -251.582, Edit: 47.9±2.7 %, NetEmpty: -0.2±2.1 %) | Val SR: 100.0±0.0 % (Edit: 44.1±4.3 %, Empty: 34.6%->33.9%)
+Epoch  36/40 | Tr SR: 100.0±0.0 % (Loss: -226.087, Edit: 47.8±2.3 %, NetEmpty: +1.1±1.5 %) | Val SR: 100.0±0.0 % (Edit: 44.3±1.4 %, Empty: 34.5%->37.9%)
+Epoch  37/40 | Tr SR: 100.0±0.0 % (Loss: -372.793, Edit: 46.6±2.1 %, NetEmpty: +3.3±2.1 %) | Val SR: 100.0±0.0 % (Edit: 41.7±4.2 %, Empty: 35.3%->35.6%)
+Epoch  38/40 | Tr SR: 100.0±0.0 % (Loss: -137.108, Edit: 45.6±2.9 %, NetEmpty: -0.6±2.7 %) | Val SR: 100.0±0.0 % (Edit: 40.0±4.1 %, Empty: 33.7%->30.3%)
+Epoch  39/40 | Tr SR: 100.0±0.0 % (Loss: -159.207, Edit: 43.2±2.2 %, NetEmpty: -2.1±2.4 %) | Val SR: 100.0±0.0 % (Edit: 40.3±6.1 %, Empty: 33.3%->27.6%)
+Epoch  40/40 | Tr SR: 100.0±0.0 % (Loss: -208.698, Edit: 44.0±3.1 %, NetEmpty: -4.0±2.5 %) | Val SR: 100.0±0.0 % (Edit: 40.9±2.3 %, Empty: 34.4%->30.7%)
+
+==================================================
+TRAINING COMPLETE. RUNNING FINAL TRUE TEST.
+==================================================
+FINAL TRUE TEST RESULTS (500 unseen theories):
+  Success Rate: 100.00 ± 0.00%
+  Total Edit:   42.06 ± 2.93%
+  Empty Before: 33.32 ± 2.25%
+  Empty After:  28.33 ± 2.93%
+  Net Empty:    -4.99 ± 2.41%
