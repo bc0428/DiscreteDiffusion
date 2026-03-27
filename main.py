@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 from datetime import datetime
 from pathlib import Path
 from pysat.solvers import Solver
@@ -378,7 +379,7 @@ class D3PMForwardCorruption(nn.Module):
 # Neural Network Architecture (The Denoiser)
 # ==========================================
 class TheoryDenoiserNet(nn.Module):
-    def __init__(self, N, M, num_classes=3, d_model=32, num_timesteps=1000):
+    def __init__(self, N, M, num_classes=3, d_model=128, num_timesteps=1000):
         super().__init__()
         self.N = N
         self.M = M
@@ -389,55 +390,90 @@ class TheoryDenoiserNet(nn.Module):
         # Embed each discrete state (0, 1, 2)
         self.state_embedding = nn.Embedding(num_classes, d_model)
 
-        # PROJECTION LAYER: Takes all N literals in a clause and fuses them into one token
-        self.clause_proj = nn.Linear(N * d_model, d_model)
-
         self.time_embed = nn.Sequential(
             nn.Linear(1, d_model),
             nn.SiLU(),
             nn.Linear(d_model, d_model)
         )
 
-        # Transformer now treats each clause (column) as a single token. Sequence length is M.
+        # 1. THE LITERAL ENCODER (Phi)
+        # Processes each literal independently. Thicker MLP to prevent feature
+        # collapse when we sum-pool them together.
+        self.literal_encoder = nn.Sequential(
+            nn.Linear(d_model, d_model * 2),
+            nn.GELU(),
+            nn.LayerNorm(d_model * 2),
+            nn.Linear(d_model * 2, d_model)
+        )
+
+        # 2. THE TRANSFORMER (Processes sequence of M clauses)
+        # Sequence length remains M, preventing quadratic explosion.
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=4, batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=4)
 
-        # Project the output clause token back into N separate literal predictions
-        self.output_projection = nn.Linear(d_model, N * num_classes)
+        # 3. THE DECODER (Rho)
+        # Takes the global clause context AND the specific literal PE (d_model * 2)
+        self.decoder = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, num_classes)
+        )
+
+    def _get_1d_sinusoidal_pe(self, length: int, device: torch.device) -> torch.Tensor:
+        """
+        Build standard 1D sinusoidal positional encodings for the literal axis.
+        """
+        pe = torch.zeros(length, self.d_model, device=device)
+        position = torch.arange(0, length, dtype=torch.float32).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, self.d_model, 2, dtype=torch.float32) * (-math.log(10000.0) / self.d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe
 
     def forward(self, x_t, t, clause_mask=None):
-        batch_size, N, M = x_t.size()
+        batch_size, N_dynamic, M_dynamic = x_t.size()
 
-        # 1. Embed states: (Batch, N, M) -> (Batch, N, M, d_model)
+        # 1. Embed States: (Batch, N, M) -> (Batch, N, M, d_model)
         x_emb = self.state_embedding(x_t)
 
-        # 2. Group by clause: Rearrange to (Batch, M, N, d_model)
+        # 2. Add Literal ID Positional Encoding (so the network knows the row)
+        literal_pe = self._get_1d_sinusoidal_pe(N_dynamic, x_t.device)  # (N, d_model)
+        x_emb = x_emb + literal_pe.unsqueeze(0).unsqueeze(2)  # Broadcast to (Batch, N, M, d_model)
+
+        # 3. Permute to clause-major: (Batch, M, N, d_model)
         x_emb = x_emb.permute(0, 2, 1, 3)
 
-        # Flatten the N literals into the feature dimension: (Batch, M, N * d_model)
-        x_emb = x_emb.reshape(batch_size, M, N * self.d_model)
+        # 4. DEEP SETS POOLING (Handles arbitrary N)
+        encoded_literals = self.literal_encoder(x_emb)  # (Batch, M, N, d_model)
+        clause_tokens = encoded_literals.sum(dim=2)  # Sum Pool -> (Batch, M, d_model)
 
-        # Project to d_model: (Batch, M, d_model)
-        x_seq = self.clause_proj(x_emb)
-
-        # Normalize time and add embedding
+        # 5. Normalize time and add embedding
         t_normalized = t.float() / self.num_timesteps
         t_emb = self.time_embed(t_normalized.unsqueeze(-1)).view(batch_size, 1, -1)
-        x_seq = x_seq + t_emb
+        clause_tokens = clause_tokens + t_emb
 
-        # PyTorch Transformer padding mask (True means "ignore this position")
+        # 6. Transform the M clauses
         src_key_padding_mask = ~clause_mask if clause_mask is not None else None
+        processed_clauses = self.transformer(clause_tokens, src_key_padding_mask=src_key_padding_mask)
 
-        # Transform! Sequence length is strictly M.
-        encoded = self.transformer(x_seq, src_key_padding_mask=src_key_padding_mask)
+        # 7. DECODE back to N predictions
+        # Broadcast the global clause token back to N
+        clause_expanded = processed_clauses.unsqueeze(2).expand(batch_size, M_dynamic, N_dynamic, self.d_model)
 
-        # Predict: (Batch, M, N * num_classes)
-        logits = self.output_projection(encoded)
+        # Broadcast the literal PE to match
+        literal_context = literal_pe.unsqueeze(0).unsqueeze(1).expand(batch_size, M_dynamic, N_dynamic, self.d_model)
+
+        # Combine global clause context with local literal ID
+        combined = torch.cat([clause_expanded, literal_context], dim=-1)  # (Batch, M, N, d_model * 2)
+
+        # Predict logits
+        logits = self.decoder(combined)  # (Batch, M, N, num_classes)
 
         # Reshape back to (Batch, N, M, num_classes)
-        logits = logits.view(batch_size, M, N, self.num_classes).permute(0, 2, 1, 3)
-
-        return logits
+        return logits.permute(0, 2, 1, 3)
 
 
 def sample_theories(model, corrupt, N, M, batch_size, num_timesteps, device, clause_mask=None):
@@ -470,7 +506,7 @@ def sample_theories(model, corrupt, N, M, batch_size, num_timesteps, device, cla
     return x_t
 
 
-def run_epoch(model, corrupt, dataloader, optimizer=None):
+def run_epoch(model, corrupt, dataloader, device, optimizer=None):
     is_training = optimizer is not None
 
     if is_training:
@@ -485,6 +521,8 @@ def run_epoch(model, corrupt, dataloader, optimizer=None):
     total_count = 0
 
     for x_0, clause_mask in dataloader:
+        x_0 = x_0.to(device)
+        clause_mask = clause_mask.to(device)
         if is_training:
             optimizer.zero_grad()
             batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
@@ -548,7 +586,7 @@ if __name__ == "__main__":
     N_LITERALS = 5
     M_CLAUSES = 20  # max number of clauses per theory
     K_STATES = 3
-    NUM_SAMPLES = 1000
+    NUM_SAMPLES = 10000
     BATCH_SIZE = 16
     TRAIN_RATIO = 0.8
     EPOCHS = 100
@@ -596,9 +634,12 @@ if __name__ == "__main__":
     emit(f"  Inconsistent theories in sanity subset: {n_inconsistent}  (should be 0)")
     emit(f"  Sanity subset size: {len(sanity_subset)} / {len(all_data)}\n")
 
-    # ── Model, optimizer ───────────────────────────────────────────────────────
-    corrupt = D3PMForwardCorruption(num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS)
-    model = TheoryDenoiserNet(N=N_LITERALS, M=M_CLAUSES, num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS)
+    # ── Device, model, optimizer ──────────────────────────────────────────────
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    emit(f"Using device: {device}\n")
+
+    corrupt = D3PMForwardCorruption(num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS).to(device)
+    model = TheoryDenoiserNet(N=N_LITERALS, M=M_CLAUSES, num_classes=K_STATES, num_timesteps=NUM_TIMESTEPS).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     # ── Training + Evaluation loop ─────────────────────────────────────────────
@@ -624,6 +665,7 @@ if __name__ == "__main__":
             model=model,
             corrupt=corrupt,
             dataloader=train_loader,
+            device=device,
             optimizer=optimizer,
         )
 
@@ -631,6 +673,7 @@ if __name__ == "__main__":
             model=model,
             corrupt=corrupt,
             dataloader=test_loader,
+            device=device,
             optimizer=None,
         )
 
