@@ -74,7 +74,13 @@ def is_consistent(theory: torch.Tensor) -> bool:
         return solver.solve()
 
 
-def generate_consistent_theory(N: int, max_clauses: int) -> torch.Tensor:
+def generate_consistent_theory(
+        N: int,
+        max_clauses: int,
+        active_N: int | None = None,
+        min_active_N: int = 1,
+        min_clauses: int = 1,
+) -> torch.Tensor:
     """
     Generate one consistent theory using the Planted Solution method.
     Randomizes both the number of clauses AND the number of active variables,
@@ -82,16 +88,22 @@ def generate_consistent_theory(N: int, max_clauses: int) -> torch.Tensor:
     """
     if max_clauses <= 0:
         raise ValueError("max_clauses must be >= 1")
+    min_clauses = max(1, min(min_clauses, max_clauses))
 
-    num_clauses = torch.randint(1, max_clauses + 1, (1,)).item()
+    num_clauses = torch.randint(min_clauses, max_clauses + 1, (1,)).item()
     # num_clauses = max_clauses
     theory = torch.zeros((N, num_clauses), dtype=torch.long)
 
-    # 1. Randomize the number of ACTIVE variables (from 1 to N)
-    num_vars = torch.randint(1, N + 1, (1,)).item()
+    if active_N is None:
+        active_N = N
+    active_N = max(1, min(active_N, N))
+    min_active_N = max(1, min(min_active_N, active_N))
 
-    # 2. Pick exactly WHICH variables are active in this theory
-    active_vars = torch.randperm(N)[:num_vars]
+    # 1. Randomize the number of ACTIVE variables within the current curriculum stage.
+    num_vars = torch.randint(min_active_N, active_N + 1, (1,)).item()
+
+    # 2. Pick exactly WHICH variables are active in this theory (restricted to first active_N rows)
+    active_vars = torch.randperm(active_N)[:num_vars]
 
     # 3. Generate a master truth assignment for all N variables
     # (We only actually care about the values for the active_vars)
@@ -124,11 +136,27 @@ def generate_consistent_theory(N: int, max_clauses: int) -> torch.Tensor:
     return theory
 
 
-def generate_dataset(num_samples: int, N: int, max_clauses: int) -> list[torch.Tensor]:
+def generate_dataset(
+        num_samples: int,
+        N: int,
+        max_clauses: int,
+        active_N: int | None = None,
+        min_active_N: int = 1,
+        min_clauses: int = 1,
+) -> list[torch.Tensor]:
     """
     Generate a list of variable-length consistent theories.
     """
-    return [generate_consistent_theory(N, max_clauses) for _ in range(num_samples)]
+    return [
+        generate_consistent_theory(
+            N,
+            max_clauses,
+            active_N=active_N,
+            min_active_N=min_active_N,
+            min_clauses=min_clauses,
+        )
+        for _ in range(num_samples)
+    ]
 
 
 class TheoryDataset(Dataset):
@@ -162,8 +190,16 @@ def theory_collate_fn(batch: list[torch.Tensor]):
 
 
 def get_dataloaders(num_samples: int, N: int, max_clauses: int,
-                    batch_size: int, train_ratio: float = 0.8):
-    data = generate_dataset(num_samples, N, max_clauses)
+                    batch_size: int, train_ratio: float = 0.8, active_N: int | None = None,
+                    min_active_N: int = 1, min_clauses: int = 1):
+    data = generate_dataset(
+        num_samples,
+        N,
+        max_clauses,
+        active_N=active_N,
+        min_active_N=min_active_N,
+        min_clauses=min_clauses,
+    )
     dataset = TheoryDataset(data)
 
     train_size = int(len(dataset) * train_ratio)
@@ -192,6 +228,29 @@ def resolve_curriculum_max_clauses(epoch: int, stages: list[tuple[int, int]], de
         else:
             break
     return active
+
+
+def resolve_curriculum_bounds(epoch: int, stages: list[tuple[int, int]], default_max: int) -> tuple[int, int]:
+    """
+    Resolve [min, max] sampling bounds for the active curriculum stage.
+
+    Example with stage maxima [3, 6, 10]:
+      stage1 -> [1, 3], stage2 -> [3, 6], stage3 -> [6, 10]
+    """
+    if not stages:
+        return 1, default_max
+
+    active_idx = 0
+    for i, (start_epoch, _) in enumerate(stages):
+        if epoch >= start_epoch:
+            active_idx = i
+        else:
+            break
+
+    max_val = stages[active_idx][1]
+    min_val = 1 if active_idx == 0 else stages[active_idx - 1][1]
+    min_val = max(1, min(min_val, max_val))
+    return min_val, max_val
 
 
 def get_uniform_transition_matrix(beta, num_classes=3):
@@ -317,7 +376,7 @@ class D3PMForwardCorruption(nn.Module):
         p_unnorm = Q_t_col * Q_bar_weighted
         return p_unnorm / p_unnorm.sum(dim=-1, keepdim=True).clamp_min(1e-12)
 
-    def compute_batch_stats(self, model, x_0, clause_mask):
+    def compute_batch_stats(self, model, x_0, clause_mask, compute_consistency: bool = True):
         batch_size = x_0.size(0)
         device = x_0.device
 
@@ -357,10 +416,11 @@ class D3PMForwardCorruption(nn.Module):
         predicted_x0 = predicted_logits.argmax(dim=-1)
 
         consistent_count = 0
-        for b in range(batch_size):
-            active_theory = predicted_x0[b, :, clause_mask[b]].detach().cpu()
-            if active_theory.numel() > 0 and is_consistent(active_theory):
-                consistent_count += 1
+        if compute_consistency:
+            for b in range(batch_size):
+                active_theory = predicted_x0[b, :, clause_mask[b]].detach().cpu()
+                if active_theory.numel() > 0 and is_consistent(active_theory):
+                    consistent_count += 1
 
         return {
             "loss": loss,
@@ -379,7 +439,7 @@ class D3PMForwardCorruption(nn.Module):
 # Neural Network Architecture (The Denoiser)
 # ==========================================
 class TheoryDenoiserNet(nn.Module):
-    def __init__(self, N, M, num_classes=3, d_model=128, num_timesteps=1000):
+    def __init__(self, N, M, num_classes=3, d_model=256, num_timesteps=1000):
         super().__init__()
         self.N = N
         self.M = M
@@ -506,7 +566,7 @@ def sample_theories(model, corrupt, N, M, batch_size, num_timesteps, device, cla
     return x_t
 
 
-def run_epoch(model, corrupt, dataloader, device, optimizer=None):
+def run_epoch(model, corrupt, dataloader, device, optimizer=None, compute_consistency: bool = True):
     is_training = optimizer is not None
 
     if is_training:
@@ -525,7 +585,7 @@ def run_epoch(model, corrupt, dataloader, device, optimizer=None):
         clause_mask = clause_mask.to(device)
         if is_training:
             optimizer.zero_grad()
-            batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
+            batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask, compute_consistency=compute_consistency)
             loss = batch_stats["loss"]
             loss.backward()
             optimizer.step()
@@ -534,42 +594,44 @@ def run_epoch(model, corrupt, dataloader, device, optimizer=None):
             total_kl_loss += batch_stats["kl_loss"].item()
             total_ce_loss += batch_stats["ce_loss"].item()
             # For training, we can keep the fast 1-shot metric just to monitor progress
-            consistent_count += batch_stats["consistent_count"]
-            total_count += batch_stats["batch_size"]
+            if compute_consistency:
+                consistent_count += batch_stats["consistent_count"]
+                total_count += batch_stats["batch_size"]
         else:
             with torch.no_grad():
                 # 1. Compute Validation Loss using normal forward stats
-                batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask)
+                batch_stats = corrupt.compute_batch_stats(model, x_0, clause_mask, compute_consistency=compute_consistency)
                 loss = batch_stats["loss"]
                 total_loss += loss.item()
                 total_kl_loss += batch_stats["kl_loss"].item()
                 total_ce_loss += batch_stats["ce_loss"].item()
 
-                # 2. Evaluate true generation quality iteratively using Re-Noising
-                batch_size = x_0.size(0)
-                device = x_0.device
-                M_batch = x_0.size(2)
+                if compute_consistency:
+                    # 2. Evaluate true generation quality iteratively using Re-Noising
+                    batch_size = x_0.size(0)
+                    device = x_0.device
+                    M_batch = x_0.size(2)
 
-                generated_theories = sample_theories(
-                    model=model,
-                    corrupt=corrupt,
-                    N=model.N,
-                    M=M_batch,
-                    batch_size=batch_size,
-                    num_timesteps=model.num_timesteps,
-                    device=device,
-                    clause_mask=clause_mask
-                )
+                    generated_theories = sample_theories(
+                        model=model,
+                        corrupt=corrupt,
+                        N=model.N,
+                        M=M_batch,
+                        batch_size=batch_size,
+                        num_timesteps=model.num_timesteps,
+                        device=device,
+                        clause_mask=clause_mask
+                    )
 
-                # 3. Check SAT Consistency of generated outputs
-                batch_consistent = 0
-                for b in range(batch_size):
-                    active_theory = generated_theories[b, :, clause_mask[b]].detach().cpu()
-                    if active_theory.numel() > 0 and is_consistent(active_theory):
-                        batch_consistent += 1
+                    # 3. Check SAT Consistency of generated outputs
+                    batch_consistent = 0
+                    for b in range(batch_size):
+                        active_theory = generated_theories[b, :, clause_mask[b]].detach().cpu()
+                        if active_theory.numel() > 0 and is_consistent(active_theory):
+                            batch_consistent += 1
 
-                consistent_count += batch_consistent
-                total_count += batch_size
+                    consistent_count += batch_consistent
+                    total_count += batch_size
 
     avg_loss = total_loss / len(dataloader)
     avg_kl = total_kl_loss / len(dataloader)
@@ -583,22 +645,32 @@ def run_epoch(model, corrupt, dataloader, device, optimizer=None):
 # ==========================================
 if __name__ == "__main__":
     # ── Hyperparameters ────────────────────────────────────────────────────────
-    N_LITERALS = 5
+    N_LITERALS = 10
     M_CLAUSES = 20  # max number of clauses per theory
     K_STATES = 3
     NUM_SAMPLES = 10000
     BATCH_SIZE = 16
     TRAIN_RATIO = 0.8
-    EPOCHS = 100
+    # EPOCHS = 100
     LR = 1e-4
     NUM_TIMESTEPS = 1000
     SANITY_CHECK_LIMIT = 200
+    CONSISTENCY_CHECK_INTERVAL = 100
+    DATA_REGEN_INTERVAL = 2
 
-    # (start_epoch, max_clauses). Theory size grows with training.
-    CURRICULUM_STAGES = [
+    EPOCHS = 150
+
+    # Ensure the model stays in Stage 1 long enough to hit CE < 0.30
+    CURRICULUM_N_STAGES = [
+        (1, max(1, N_LITERALS // 3)),
+        (35, max(1, (2 * N_LITERALS) // 3)),
+        (75, N_LITERALS),  # Gives 75 solid epochs to the hardest stage
+    ]
+
+    CURRICULUM_M_STAGES = [
         (1, max(1, M_CLAUSES // 3)),
-        (max(2, EPOCHS // 3), max(1, (2 * M_CLAUSES) // 3)),
-        (max(3, (2 * EPOCHS) // 3), M_CLAUSES),
+        (35, max(1, (2 * M_CLAUSES) // 3)),
+        (75, M_CLAUSES),
     ]
 
     log_lines: list[str] = []
@@ -610,10 +682,12 @@ if __name__ == "__main__":
 
 
     # ── Build initial dataset & loaders ───────────────────────────────────────
-    active_max_clauses = resolve_curriculum_max_clauses(1, CURRICULUM_STAGES, M_CLAUSES)
+    active_min_literals, active_max_literals = resolve_curriculum_bounds(1, CURRICULUM_N_STAGES, N_LITERALS)
+    active_min_clauses, active_max_clauses = resolve_curriculum_bounds(1, CURRICULUM_M_STAGES, M_CLAUSES)
     emit(
         f"Generating {NUM_SAMPLES} consistent theories "
-        f"(N={N_LITERALS}, active max M={active_max_clauses}, global max M={M_CLAUSES})..."
+        f"(active N range=[{active_min_literals},{active_max_literals}], global max N={N_LITERALS}, "
+        f"active M range=[{active_min_clauses},{active_max_clauses}], global max M={M_CLAUSES})..."
     )
     train_loader, test_loader, all_data = get_dataloaders(
         num_samples=NUM_SAMPLES,
@@ -621,6 +695,9 @@ if __name__ == "__main__":
         max_clauses=active_max_clauses,
         batch_size=BATCH_SIZE,
         train_ratio=TRAIN_RATIO,
+        active_N=active_max_literals,
+        min_active_N=active_min_literals,
+        min_clauses=active_min_clauses,
     )
     train_count = int(NUM_SAMPLES * TRAIN_RATIO)
     test_count = NUM_SAMPLES - train_count
@@ -643,23 +720,55 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     # ── Training + Evaluation loop ─────────────────────────────────────────────
-    current_stage_max = active_max_clauses
+    current_stage_n_min = active_min_literals
+    current_stage_n_max = active_max_literals
+    current_stage_m_min = active_min_clauses
+    current_stage_m_max = active_max_clauses
 
     for epoch in range(1, EPOCHS + 1):
-        stage_max = resolve_curriculum_max_clauses(epoch, CURRICULUM_STAGES, M_CLAUSES)
+        stage_n_min, stage_n_max = resolve_curriculum_bounds(epoch, CURRICULUM_N_STAGES, N_LITERALS)
+        stage_m_min, stage_m_max = resolve_curriculum_bounds(epoch, CURRICULUM_M_STAGES, M_CLAUSES)
 
-        if stage_max != current_stage_max:
-            current_stage_max = stage_max
-            emit(f"\n[Curriculum] Epoch {epoch}: switching active max clauses to {current_stage_max}")
+        stage_changed = (
+            stage_n_min != current_stage_n_min
+            or stage_n_max != current_stage_n_max
+            or stage_m_min != current_stage_m_min
+            or stage_m_max != current_stage_m_max
+        )
+
+        periodic_refresh = DATA_REGEN_INTERVAL > 0 and (epoch % DATA_REGEN_INTERVAL == 0)
+
+        if stage_changed or periodic_refresh:
+            current_stage_n_min = stage_n_min
+            current_stage_n_max = stage_n_max
+            current_stage_m_min = stage_m_min
+            current_stage_m_max = stage_m_max
+            if stage_changed:
+                emit(
+                    f"\n[Curriculum] Epoch {epoch}: switching to active ranges "
+                    f"N=[{current_stage_n_min},{current_stage_n_max}], "
+                    f"M=[{current_stage_m_min},{current_stage_m_max}]"
+                )
+            else:
+                emit(
+                    f"\n[Data Refresh] Epoch {epoch}: regenerating data within current ranges "
+                    f"N=[{current_stage_n_min},{current_stage_n_max}], "
+                    f"M=[{current_stage_m_min},{current_stage_m_max}]"
+                )
             train_loader, test_loader, all_data = get_dataloaders(
                 num_samples=NUM_SAMPLES,
                 N=N_LITERALS,
-                max_clauses=current_stage_max,
+                max_clauses=current_stage_m_max,
                 batch_size=BATCH_SIZE,
                 train_ratio=TRAIN_RATIO,
+                active_N=current_stage_n_max,
+                min_active_N=current_stage_n_min,
+                min_clauses=current_stage_m_min,
             )
             emit(f"  Train batches : {len(train_loader)}  ({train_count} theories)")
             emit(f"  Test  batches : {len(test_loader)}  ({test_count} theories)")
+
+        do_consistency_check = (epoch % CONSISTENCY_CHECK_INTERVAL == 0)
 
         train_loss, train_kl, train_ce, train_consistent, train_total, train_consistency = run_epoch(
             model=model,
@@ -667,6 +776,7 @@ if __name__ == "__main__":
             dataloader=train_loader,
             device=device,
             optimizer=optimizer,
+            compute_consistency=do_consistency_check,
         )
 
         test_loss, test_kl, test_ce, test_consistent, test_total, test_consistency = run_epoch(
@@ -675,15 +785,24 @@ if __name__ == "__main__":
             dataloader=test_loader,
             device=device,
             optimizer=None,
+            compute_consistency=do_consistency_check,
         )
+
+        if do_consistency_check:
+            train_consistency_str = f"{train_consistent}/{train_total} ({train_consistency:.1f}%)"
+            test_consistency_str = f"{test_consistent}/{test_total} ({test_consistency:.1f}%)"
+        else:
+            train_consistency_str = "skipped (runs every 5 epochs)"
+            test_consistency_str = "skipped (runs every 5 epochs)"
 
         emit(
             f"Epoch {epoch:>3}/{EPOCHS} | "
-            f"Stage max M: {current_stage_max} | "
+            f"Stage N: [{current_stage_n_min},{current_stage_n_max}], "
+            f"M: [{current_stage_m_min},{current_stage_m_max}] | "
             f"Train Loss: {train_loss:.4f} (KL {train_kl:.4f} CE {train_ce:.4f}) | "
-            f"Train Consistent: {train_consistent}/{train_total} ({train_consistency:.1f}%) | "
+            f"Train Consistent: {train_consistency_str} | "
             f"Test Loss: {test_loss:.4f} (KL {test_kl:.4f} CE {test_ce:.4f}) | "
-            f"Test Consistent: {test_consistent}/{test_total} ({test_consistency:.1f}%)"
+            f"Test Consistent: {test_consistency_str}"
         )
 
     # ── Persist artifacts ──────────────────────────────────────────────────────
@@ -709,7 +828,12 @@ if __name__ == "__main__":
                 "LR": LR,
                 "NUM_TIMESTEPS": NUM_TIMESTEPS,
                 "SAT_SOLVER_BACKEND": SAT_SOLVER_BACKEND,
-                "CURRICULUM_STAGES": CURRICULUM_STAGES,
+                "CONSISTENCY_CHECK_INTERVAL": CONSISTENCY_CHECK_INTERVAL,
+                "DATA_REGEN_INTERVAL": DATA_REGEN_INTERVAL,
+                # Keep CURRICULUM_STAGES for backward compatibility with older scripts.
+                "CURRICULUM_STAGES": CURRICULUM_M_STAGES,
+                "CURRICULUM_N_STAGES": CURRICULUM_N_STAGES,
+                "CURRICULUM_M_STAGES": CURRICULUM_M_STAGES,
             },
         },
         model_path,

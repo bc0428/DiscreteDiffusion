@@ -31,6 +31,8 @@ import argparse
 import sys
 from pathlib import Path
 from statistics import mean, stdev
+import random
+from collections import Counter
 
 import torch
 
@@ -42,9 +44,19 @@ from main import D3PMForwardCorruption, TheoryDenoiserNet, generate_consistent_t
 CHECKPOINT_PATH: str | None = None   # e.g. "outputs/theory_denoiser_20260314_120000.pt"
 
 
-def generate_test_theory(N: int, max_clauses: int) -> torch.Tensor:
-    """Reuse training generator so test theories follow the same consistency construction."""
-    return generate_consistent_theory(N, max_clauses)
+def generate_test_theory(max_N: int, max_M: int) -> torch.Tensor:
+    target_N = random.randint(1, max_N)
+    target_M = random.randint(1, max_M)
+
+    theory = generate_consistent_theory(
+        N=max_N,                 # keep global row count for model compatibility
+        max_clauses=target_M,
+        active_N=target_N,
+        min_active_N=target_N,   # force sampled active variable count
+        min_clauses=target_M,    # force sampled clause count
+    )
+    return theory
+
 
 
 # ==========================================
@@ -183,10 +195,69 @@ def run_evaluation(
     """
     Evaluate a list of theories and print a full summary.
     """
+
+    def _summarize_theory_sizes(theory_list: list[torch.Tensor]) -> dict:
+        """
+        Summarize realized active theory sizes from tensors being evaluated.
+
+        active_N = number of rows with at least one non-zero literal entry.
+        active_M = number of clause columns (tensor width).
+        """
+        active_n_values = []
+        active_m_values = []
+        for th in theory_list:
+            if th.dim() != 2:
+                continue
+            active_n = int((th != 0).any(dim=1).sum().item())
+            active_m = int(th.size(1))
+            active_n_values.append(active_n)
+            active_m_values.append(active_m)
+
+        def _stats(vals: list[int]) -> tuple[int, int, float, float]:
+            if not vals:
+                return 0, 0, 0.0, 0.0
+            if len(vals) == 1:
+                return min(vals), max(vals), float(vals[0]), 0.0
+            return min(vals), max(vals), mean(vals), stdev(vals)
+
+        n_min, n_max, n_mean, n_std = _stats(active_n_values)
+        m_min, m_max, m_mean, m_std = _stats(active_m_values)
+        n_dist = Counter(active_n_values)
+        m_dist = Counter(active_m_values)
+
+        return {
+            "n_min": n_min,
+            "n_max": n_max,
+            "n_mean": n_mean,
+            "n_std": n_std,
+            "m_min": m_min,
+            "m_max": m_max,
+            "m_mean": m_mean,
+            "m_std": m_std,
+            "n_dist": n_dist,
+            "m_dist": m_dist,
+        }
+
     print(f"\n{'=' * 60}")
     print(f"  {run_name}")
     print(f"  {len(theories)} theories  |  max denoising steps: {max_steps}")
     print(f"{'=' * 60}")
+
+    size_stats = _summarize_theory_sizes(theories)
+    print("  Theory size stats (realized in this test set):")
+    print(
+        f"    Active N (non-empty rows): min={size_stats['n_min']}  max={size_stats['n_max']}  "
+        f"mean={size_stats['n_mean']:.2f}  std={size_stats['n_std']:.2f}"
+    )
+    print(
+        f"    Active M (clauses):        min={size_stats['m_min']}  max={size_stats['m_max']}  "
+        f"mean={size_stats['m_mean']:.2f}  std={size_stats['m_std']:.2f}"
+    )
+
+    n_dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(size_stats["n_dist"].items()))
+    m_dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(size_stats["m_dist"].items()))
+    print(f"    Active N distribution: {n_dist_str}")
+    print(f"    Active M distribution: {m_dist_str}")
 
     all_consistent = []
     all_steps = []
@@ -265,7 +336,7 @@ def main() -> None:
         default=CHECKPOINT_PATH,
         help="Path to the .pt checkpoint file (default: latest in outputs/).",
     )
-    parser.add_argument("--num_theories", type=int, default=100,
+    parser.add_argument("--num_theories", type=int, default=500,
                         help="Number of test theories (default: 100).")
     parser.add_argument("--max_steps", type=int, default=None,
                         help="Max denoising steps (default: NUM_TIMESTEPS from checkpoint config).")
@@ -281,13 +352,25 @@ def main() -> None:
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
 
-    N           = cfg["N_LITERALS"]
-    M           = cfg["M_CLAUSES"]
+    N_base       = cfg["N_LITERALS"]
+    M_base       = cfg["M_CLAUSES"]
     K           = cfg["K_STATES"]
     T           = cfg["NUM_TIMESTEPS"]
     max_steps   = args.max_steps if args.max_steps is not None else T
 
-    print(f"Config: N={N}  M={M}  K={K}  T={T}  max_steps={max_steps}")
+    # Use the largest N/M seen during curriculum training (fallback to base values).
+    n_stages = cfg.get("CURRICULUM_N_LITERALS", [])
+    m_stages = cfg.get("CURRICULUM_M_CLAUSES", cfg.get("CURRICULUM_STAGES", []))
+
+    N = max([N_base] + [stage_n for _, stage_n in n_stages]) if n_stages else N_base
+    M = max([M_base] + [stage_m for _, stage_m in m_stages]) if m_stages else M_base
+
+    print(
+        f"Config from checkpoint: base N={N_base}  base M={M_base}  K={K}  T={T}"
+    )
+    print(
+        f"Evaluation sizes: max N={N}  max M={M}  max_steps={max_steps}"
+    )
 
     device = torch.device("cpu")
 
@@ -300,11 +383,14 @@ def main() -> None:
     corrupt = D3PMForwardCorruption(num_classes=K, num_timesteps=T)
     corrupt.to(device)
 
-    print(f"\nGenerating {args.num_theories} SAT-consistent theories via generate_consistent_theory (N={N}, max_clauses={M})...")
+    print(
+        f"\nGenerating {args.num_theories} SAT-consistent theories with randomized sizes "
+        f"(active N in [1,{N}], active M in [1,{M}])..."
+    )
     theories = [generate_test_theory(N, M) for _ in range(args.num_theories)]
 
     run_evaluation(
-        run_name="Evaluation – Consistent theories from generate_consistent_theory",
+        run_name="Evaluation – Consistent theories with randomized active N/M",
         theories=theories,
         model=model,
         corrupt=corrupt,
@@ -323,7 +409,7 @@ def main() -> None:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         run_evaluation(
-            run_name="Evaluation – Consistent theories from generate_consistent_theory",
+            run_name="Evaluation – Consistent theories with randomized active N/M",
             theories=theories,
             model=model,
             corrupt=corrupt,
