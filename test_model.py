@@ -40,6 +40,17 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent))
 from main import D3PMForwardCorruption, TheoryDenoiserNet, generate_consistent_theory, is_consistent
 
+# ==========================================
+# Logging Setup
+# ==========================================
+log_lines: list[str] = []
+
+def emit(msg: str = "") -> None:
+    """Prints to console and saves to an in-memory list for file writing."""
+    print(msg)
+    log_lines.append(msg)
+
+
 # ── default checkpoint (override with --checkpoint) ───────────────────────────
 CHECKPOINT_PATH: str | None = None   # e.g. "outputs/theory_denoiser_20260314_120000.pt"
 
@@ -238,26 +249,26 @@ def run_evaluation(
             "m_dist": m_dist,
         }
 
-    print(f"\n{'=' * 60}")
-    print(f"  {run_name}")
-    print(f"  {len(theories)} theories  |  max denoising steps: {max_steps}")
-    print(f"{'=' * 60}")
+    emit(f"\n{'=' * 60}")
+    emit(f"  {run_name}")
+    emit(f"  {len(theories)} theories  |  max denoising steps: {max_steps}")
+    emit(f"{'=' * 60}")
 
     size_stats = _summarize_theory_sizes(theories)
-    print("  Theory size stats (realized in this test set):")
-    print(
+    emit("  Theory size stats (realized in this test set):")
+    emit(
         f"    Active N (non-empty rows): min={size_stats['n_min']}  max={size_stats['n_max']}  "
         f"mean={size_stats['n_mean']:.2f}  std={size_stats['n_std']:.2f}"
     )
-    print(
+    emit(
         f"    Active M (clauses):        min={size_stats['m_min']}  max={size_stats['m_max']}  "
         f"mean={size_stats['m_mean']:.2f}  std={size_stats['m_std']:.2f}"
     )
 
     n_dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(size_stats["n_dist"].items()))
     m_dist_str = ", ".join(f"{k}:{v}" for k, v in sorted(size_stats["m_dist"].items()))
-    print(f"    Active N distribution: {n_dist_str}")
-    print(f"    Active M distribution: {m_dist_str}")
+    emit(f"    Active N distribution: {n_dist_str}")
+    emit(f"    Active M distribution: {m_dist_str}")
 
     all_consistent = []
     all_steps = []
@@ -278,7 +289,7 @@ def run_evaluation(
         all_empty_change_pct.append(result["empty_change_pct"])
 
         status = "OK" if result["consistent"] else "NO"
-        print(
+        emit(
             f"  [{idx + 1:>4}] {status} "
             f"steps={result['steps_to_first']:>4}  "
             f"total_change={result['total_change_pct']:>6.2f}%  "
@@ -298,24 +309,24 @@ def run_evaluation(
     avg_empty_change = mean(all_empty_change_pct)
     std_empty_change = stdev(all_empty_change_pct) if len(all_empty_change_pct) > 1 else 0.0
 
-    print(f"\n  -- Summary ---------------------------------------------")
-    print(f"  Metric 1 - Revision percentages (original vs final)")
-    print(f"    Total change % : mean={avg_total_change:.2f}%  std={std_total_change:.2f}%")
-    print(f"    Empty change % : mean={avg_empty_change:+.2f}%  std={std_empty_change:.2f}%")
-    print(f"    (positive empty change => more empty cells in final output)")
-    print()
-    print(f"  Metric 2 – Denoising steps to first consistent theory")
-    print(f"    Evaluated on {n_consistent}/{len(theories)} theories that reached consistency")
+    emit(f"\n  -- Summary ---------------------------------------------")
+    emit(f"  Metric 1 - Revision percentages (original vs final)")
+    emit(f"    Total change % : mean={avg_total_change:.2f}%  std={std_total_change:.2f}%")
+    emit(f"    Empty change % : mean={avg_empty_change:+.2f}%  std={std_empty_change:.2f}%")
+    emit(f"    (positive empty change => more empty cells in final output)")
+    emit()
+    emit(f"  Metric 2 – Denoising steps to first consistent theory")
+    emit(f"    Evaluated on {n_consistent}/{len(theories)} theories that reached consistency")
     if consistent_steps:
-        print(f"    Mean : {avg_steps:.1f}  Std : {std_steps:.1f}  (out of {max_steps} max steps)")
-        print(f"    (lower is better; model converged faster)")
+        emit(f"    Mean : {avg_steps:.1f}  Std : {std_steps:.1f}  (out of {max_steps} max steps)")
+        emit(f"    (lower is better; model converged faster)")
     else:
-        print(f"    No theories reached consistency within {max_steps} steps.")
-    print()
-    print(f"  Metric 3 – Consistency rate")
-    print(f"    {n_consistent} / {len(theories)} = {consistency_rate:.1f}%")
-    print(f"    (higher is better)")
-    print(f"{'=' * 60}")
+        emit(f"    No theories reached consistency within {max_steps} steps.")
+    emit()
+    emit(f"  Metric 3 – Consistency rate")
+    emit(f"    {n_consistent} / {len(theories)} = {consistency_rate:.1f}%")
+    emit(f"    (higher is better)")
+    emit(f"{'=' * 60}")
 
 
 # ==========================================
@@ -345,10 +356,10 @@ def main() -> None:
     # ── Locate checkpoint ─────────────────────────────────────────────────────
     ckpt_path = Path(args.checkpoint) if args.checkpoint else find_latest_checkpoint(Path("outputs"))
     if ckpt_path is None or not ckpt_path.exists():
-        print("ERROR: No checkpoint found. Run main.py first or pass --checkpoint <path>.")
+        emit("ERROR: No checkpoint found. Run main.py first or pass --checkpoint <path>.")
         sys.exit(1)
 
-    print(f"Loading checkpoint: {ckpt_path}")
+    emit(f"Loading checkpoint: {ckpt_path}")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
 
@@ -365,10 +376,10 @@ def main() -> None:
     N = max([N_base] + [stage_n for _, stage_n in n_stages]) if n_stages else N_base
     M = max([M_base] + [stage_m for _, stage_m in m_stages]) if m_stages else M_base
 
-    print(
+    emit(
         f"Config from checkpoint: base N={N_base}  base M={M_base}  K={K}  T={T}"
     )
-    print(
+    emit(
         f"Evaluation sizes: max N={N}  max M={M}  max_steps={max_steps}"
     )
 
@@ -383,12 +394,13 @@ def main() -> None:
     corrupt = D3PMForwardCorruption(num_classes=K, num_timesteps=T)
     corrupt.to(device)
 
-    print(
+    emit(
         f"\nGenerating {args.num_theories} SAT-consistent theories with randomized sizes "
         f"(active N in [1,{N}], active M in [1,{M}])..."
     )
     theories = [generate_test_theory(N, M) for _ in range(args.num_theories)]
 
+    # Run evaluation ONCE (prints to console and appends to log_lines automatically)
     run_evaluation(
         run_name="Evaluation – Consistent theories with randomized active N/M",
         theories=theories,
@@ -404,23 +416,12 @@ def main() -> None:
     log_path = Path("outputs") / f"test_results_{run_id}.txt"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Re-run and capture to file by redirecting stdout
-    import io, contextlib
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        run_evaluation(
-            run_name="Evaluation – Consistent theories with randomized active N/M",
-            theories=theories,
-            model=model,
-            corrupt=corrupt,
-            max_steps=max_steps,
-            device=device,
-        )
+    # Instantly dump memory to file
+    log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
-    log_path.write_text(buf.getvalue(), encoding="utf-8")
+    # Standard print so the success message isn't logged inside the file itself
     print(f"\nResults saved to: {log_path}")
 
 
 if __name__ == "__main__":
     main()
-
