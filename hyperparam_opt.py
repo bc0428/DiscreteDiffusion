@@ -3,6 +3,11 @@ tune_rl_hyperparams.py
 ======================
 Optimizes RL reward parameters and learning rate for the D3PM Theory Denoiser
 using Multi-Objective Bayesian Optimization (Optuna).
+
+Target Metrics:
+1. Maximize Consistency Success Rate
+2. Minimize Total Change Percentage (Minimal Edit Distance from Corrupted State)
+3. Minimize Absolute Net Empty Change
 """
 
 import os
@@ -24,7 +29,7 @@ from main import (
     D3PMForwardCorruption,
     get_dataloaders,
     is_consistent,
-    resolve_curriculum_bounds  # <-- Updated import
+    resolve_curriculum_bounds
 )
 
 # ==========================================
@@ -34,27 +39,26 @@ CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
 EPOCHS_PER_TRIAL = 20
 NUM_ROLLOUTS_PER_EPOCH = 16
 N_TRIALS = 50
+START_DENOISE_MIN, START_DENOISE_MAX = 50, 251  # Range for random starting corruption level (timestep)
 
 
-def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, update_model=True, clause_mask_batch=None):
+def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, clause_mask_batch, update_model=True):
     if update_model:
         model.train()
     else:
         model.eval()
 
-    if clause_mask_batch is not None:
-        clause_mask = clause_mask_batch
-    else:
-        try:
-            _, clause_mask = next(iter(dataloader))
-        except StopIteration:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0
-
-    batch_size = clause_mask.size(0)
-    clause_mask = clause_mask.to(device)
+    batch_size = x_0_batch.size(0)
+    clause_mask = clause_mask_batch.to(device)
     valid_mask_float = clause_mask.unsqueeze(1).float()
 
-    x_t = torch.randint(0, model.num_classes, (batch_size, model.N, clause_mask.size(1)), device=device)
+    # ── NEW: PARTIAL CORRUPTION (SDEdit Approach) ──
+    # Randomize starting corruption level between 50 and 250
+    start_t = torch.randint(START_DENOISE_MIN, START_DENOISE_MAX, (1,)).item()
+    t_start_tensor = torch.full((batch_size,), start_t, device=device, dtype=torch.long)
+
+    # Apply forward diffusion to create corrupted starting theories
+    x_t = corrupt.q_sample(x_0_batch.to(device), t_start_tensor, clause_mask=clause_mask)
     x_t = x_t.masked_fill(~clause_mask.unsqueeze(1), 0)
 
     # Track states for our metrics and terminal rewards
@@ -69,7 +73,8 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
 
     # ── PHASE 1: NO-GRADIENT ROLLOUT ──
     with torch.no_grad():
-        for t_step in reversed(range(1, model.num_timesteps + 1)):
+        # Only iterate down from our specific starting timestep
+        for t_step in reversed(range(1, start_t + 1)):
             if not active_mask.any():
                 break
 
@@ -102,7 +107,8 @@ def run_tuning_rollouts(model, corrupt, dataloader, optimizer, device, params, u
 
                 # Terminal Reward Logic
                 if active_theory.numel() > 0 and is_consistent(active_theory):
-                    time_saved_pct = (t_step - 1) / model.num_timesteps
+                    # Update denominator to start_t so the speed bonus scales correctly
+                    time_saved_pct = (t_step - 1) / start_t
                     gross_reward = params['massive_reward'] + (params['early_finish_bonus'] * time_saved_pct)
 
                     valid_cells_b = valid_mask_float[b].sum().item() * model.N
@@ -204,37 +210,35 @@ def objective(trial):
     corrupt = D3PMForwardCorruption(num_classes=cfg["K_STATES"], num_timesteps=cfg["NUM_TIMESTEPS"]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
 
-    # ── NEW CURRICULUM BOUNDS LOGIC ──
     n_stages = cfg.get("CURRICULUM_N_STAGES", [(1, cfg["N_LITERALS"])])
     m_stages = cfg.get("CURRICULUM_M_STAGES", cfg.get("CURRICULUM_STAGES", [(1, cfg["M_CLAUSES"])]))
-
     active_min_literals, active_max_literals = resolve_curriculum_bounds(999, n_stages, cfg["N_LITERALS"])
     active_min_clauses, active_max_clauses = resolve_curriculum_bounds(999, m_stages, cfg["M_CLAUSES"])
 
     train_loader, test_loader, _ = get_dataloaders(
         num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
-        N=cfg["N_LITERALS"],
-        max_clauses=active_max_clauses,
-        batch_size=cfg["BATCH_SIZE"],
-        train_ratio=0.8,
-        active_N=active_max_literals,
-        min_active_N=active_min_literals,
+        N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
+        batch_size=cfg["BATCH_SIZE"], train_ratio=0.8,
+        active_N=active_max_literals, min_active_N=active_min_literals,
         min_clauses=active_min_clauses
     )
 
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-        for _ in range(NUM_ROLLOUTS_PER_EPOCH):
-            run_tuning_rollouts(model, corrupt, train_loader, optimizer, device, params)
+        for x_0_batch, clause_mask in train_loader:
+            run_tuning_rollouts(
+                model, corrupt, optimizer, device, params,
+                x_0_batch=x_0_batch, clause_mask_batch=clause_mask, update_model=True
+            )
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
     test_sr_list, test_chg_list, test_e_bef_list, test_e_aft_list, test_net_list = [], [], [], [], []
 
     with torch.no_grad():
-        for _, clause_mask in test_loader:
+        for x_0_batch, clause_mask in test_loader:
             _, sr, _, chg, e_bef, e_aft, bsz = run_tuning_rollouts(
-                model, corrupt, dataloader=None, optimizer=None, device=device,
-                params=params, update_model=False, clause_mask_batch=clause_mask,
+                model, corrupt, optimizer=None, device=device, params=params,
+                x_0_batch=x_0_batch, clause_mask_batch=clause_mask, update_model=False
             )
             if bsz == 0:
                 continue
@@ -256,7 +260,6 @@ def objective(trial):
     final_e_bef, final_e_bef_std = mean_std(test_e_bef_list)
     final_e_aft, final_e_aft_std = mean_std(test_e_aft_list)
     final_net_change, final_net_std = mean_std(test_net_list)
-
     abs_empty_change = abs(final_net_change)
 
     print(

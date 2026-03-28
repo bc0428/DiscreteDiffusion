@@ -13,8 +13,9 @@ For each theory, three metrics are reported:
 
   2. Denoising steps to first consistent theory
        The reverse diffusion loop stops as soon as a SAT-consistent
-       prediction is found, rather than running all T steps.
-       Reports the step at which that first happened, or T if never found.
+       prediction is found.
+       Reports the normalized percentage of steps used relative to the
+       randomized starting noise level.
 
   3. Consistency rate
        Percentage of all test theories that reached a consistent prediction
@@ -55,7 +56,7 @@ def emit(msg: str = "") -> None:
 CHECKPOINT_PATH: str | None = None   # e.g. "outputs/theory_denoiser_20260314_120000.pt"
 
 
-def generate_test_theory(max_N: int, max_M: int) -> torch.Tensor:
+def generate_test_theory(max_N: int, max_M: int) -> tuple[torch.Tensor, int]:
     target_N = random.randint(1, max_N)
     target_M = random.randint(1, max_M)
 
@@ -66,8 +67,10 @@ def generate_test_theory(max_N: int, max_M: int) -> torch.Tensor:
         min_active_N=target_N,   # force sampled active variable count
         min_clauses=target_M,    # force sampled clause count
     )
-    return theory
 
+    # Pick a random starting timestep between 50 and 250 for partial corruption
+    start_t = random.randint(50, 250)
+    return theory, start_t
 
 
 # ==========================================
@@ -117,22 +120,14 @@ def denoise_until_consistent(
     theory: torch.Tensor,
     model: TheoryDenoiserNet,
     corrupt: D3PMForwardCorruption,
-    max_steps: int,
+    start_t: int,
     device: torch.device,
 ) -> dict:
     """
     Run the reverse diffusion loop on a SINGLE theory.
 
     Stops as soon as the predicted x_0 is SAT-consistent, or after
-    `max_steps` steps, whichever comes first.
-
-    Returns a dict with:
-      - consistent        : bool   – did we ever reach a consistent theory?
-      - steps_to_first    : int    – step index at which consistency was first found
-                                     (max_steps if never found)
-      - total_revision    : int    – total number of all-zero clause predictions
-                                     summed across ALL denoising steps
-      - final_theory      : Tensor – last predicted x_0, shape (N, M_active)
+    `start_t` steps, whichever comes first.
     """
     model.eval()
 
@@ -144,16 +139,20 @@ def denoise_until_consistent(
     x_0_ref = theory.unsqueeze(0).to(device)           # (1, N, M)
 
     with torch.no_grad():
-        # Start from fully noised sample using the clean theory as reference
-        t_max = torch.full((1,), max_steps - 1, device=device, dtype=torch.long)
+        # Start from partially noised sample using the clean theory as reference
+        t_max = torch.full((1,), start_t, device=device, dtype=torch.long)
         x_t = corrupt.q_sample(x_0_ref, t_max, clause_mask=clause_mask)
 
-        steps_to_first = max_steps
+        # Capture the corrupted starting state to measure edits against it
+        x_initial_cpu = x_t[0, :, clause_mask[0].cpu()].cpu().clone()
+
+        steps_to_first = start_t
         reached_consistent = False
         final_theory = None
         x_0_pred = x_t  # fallback if loop body never executes
 
-        for t_step in reversed(range(max_steps)):
+        # Only reverse from start_t down to 1
+        for t_step in reversed(range(1, start_t + 1)):
             t_tensor = torch.full((1,), t_step, device=device, dtype=torch.long)
             logits = model(x_t, t_tensor, clause_mask=clause_mask)
             x_0_pred = logits.argmax(dim=-1)           # (1, N, M)
@@ -164,11 +163,11 @@ def denoise_until_consistent(
 
             if is_consistent(active_theory):
                 reached_consistent = True
-                steps_to_first = max_steps - t_step    # steps elapsed so far
+                steps_to_first = start_t - t_step + 1    # steps elapsed so far
                 final_theory = active_theory
                 break                                   # stop early
 
-            if t_step > 0:
+            if t_step > 1:
                 t_minus_1 = torch.full((1,), t_step - 1, device=device, dtype=torch.long)
                 x_t = corrupt.q_sample(x_0_pred, t_minus_1, clause_mask=clause_mask)
             else:
@@ -177,10 +176,8 @@ def denoise_until_consistent(
         if final_theory is None:
             final_theory = x_0_pred[0, :, clause_mask[0].cpu()].cpu()
 
-        # Revision metrics: element-wise diff and empty cells in final theory.
-        # Computed ONCE on original vs final, not accumulated across steps.
-        original_cpu = theory.cpu()           # (N, M) — original input
-        rev = count_revision_steps(original_cpu, final_theory)
+        # Measure edits from the corrupted starting state
+        rev = count_revision_steps(x_initial_cpu, final_theory)
 
     return {
         "consistent": reached_consistent,
@@ -197,26 +194,20 @@ def denoise_until_consistent(
 
 def run_evaluation(
     run_name: str,
-    theories: list[torch.Tensor],
+    theories: list[tuple[torch.Tensor, int]],
     model: TheoryDenoiserNet,
     corrupt: D3PMForwardCorruption,
-    max_steps: int,
     device: torch.device,
 ) -> None:
     """
     Evaluate a list of theories and print a full summary.
     """
 
-    def _summarize_theory_sizes(theory_list: list[torch.Tensor]) -> dict:
-        """
-        Summarize realized active theory sizes from tensors being evaluated.
-
-        active_N = number of rows with at least one non-zero literal entry.
-        active_M = number of clause columns (tensor width).
-        """
+    def _summarize_theory_sizes(theory_list: list[tuple[torch.Tensor, int]]) -> dict:
         active_n_values = []
         active_m_values = []
-        for th in theory_list:
+        for item in theory_list:
+            th = item[0]  # unpack the theory tensor from the tuple
             if th.dim() != 2:
                 continue
             active_n = int((th != 0).any(dim=1).sum().item())
@@ -251,7 +242,7 @@ def run_evaluation(
 
     emit(f"\n{'=' * 60}")
     emit(f"  {run_name}")
-    emit(f"  {len(theories)} theories  |  max denoising steps: {max_steps}")
+    emit(f"  {len(theories)} theories  |  start_t: Randomized [50, 250]")
     emit(f"{'=' * 60}")
 
     size_stats = _summarize_theory_sizes(theories)
@@ -272,26 +263,28 @@ def run_evaluation(
 
     all_consistent = []
     all_steps = []
+    all_start_t = []
     all_total_change_pct = []
     all_empty_change_pct = []
 
-    for idx, theory in enumerate(theories):
+    for idx, (theory, start_t) in enumerate(theories):
         result = denoise_until_consistent(
             theory=theory,
             model=model,
             corrupt=corrupt,
-            max_steps=max_steps,
+            start_t=start_t,
             device=device,
         )
         all_consistent.append(result["consistent"])
         all_steps.append(result["steps_to_first"])
+        all_start_t.append(start_t)
         all_total_change_pct.append(result["total_change_pct"])
         all_empty_change_pct.append(result["empty_change_pct"])
 
         status = "OK" if result["consistent"] else "NO"
         emit(
             f"  [{idx + 1:>4}] {status} "
-            f"steps={result['steps_to_first']:>4}  "
+            f"steps={result['steps_to_first']:>3}/{start_t:<3}  "
             f"total_change={result['total_change_pct']:>6.2f}%  "
             f"empty_change={result['empty_change_pct']:>+7.2f}%"
         )
@@ -300,9 +293,19 @@ def run_evaluation(
     n_consistent = sum(all_consistent)
     consistency_rate = 100.0 * n_consistent / len(theories)
 
+    # Filter steps and start times only for theories that reached consistency
     consistent_steps = [s for s, c in zip(all_steps, all_consistent) if c]
+    consistent_starts = [t for t, c in zip(all_start_t, all_consistent) if c]
+
     avg_steps = mean(consistent_steps) if consistent_steps else float("nan")
-    std_steps = stdev(consistent_steps) if len(consistent_steps) > 1 else 0.0
+    avg_start = mean(consistent_starts) if consistent_starts else float("nan")
+
+    if consistent_steps:
+        normalized_step_pcts = [(s / t) * 100.0 for s, t in zip(consistent_steps, consistent_starts)]
+        avg_norm_pct = mean(normalized_step_pcts)
+        std_norm_pct = stdev(normalized_step_pcts) if len(normalized_step_pcts) > 1 else 0.0
+    else:
+        avg_norm_pct, std_norm_pct = float("nan"), 0.0
 
     avg_total_change = mean(all_total_change_pct)
     std_total_change = stdev(all_total_change_pct) if len(all_total_change_pct) > 1 else 0.0
@@ -310,7 +313,7 @@ def run_evaluation(
     std_empty_change = stdev(all_empty_change_pct) if len(all_empty_change_pct) > 1 else 0.0
 
     emit(f"\n  -- Summary ---------------------------------------------")
-    emit(f"  Metric 1 - Revision percentages (original vs final)")
+    emit(f"  Metric 1 - Revision percentages (corrupted vs final)")
     emit(f"    Total change % : mean={avg_total_change:.2f}%  std={std_total_change:.2f}%")
     emit(f"    Empty change % : mean={avg_empty_change:+.2f}%  std={std_empty_change:.2f}%")
     emit(f"    (positive empty change => more empty cells in final output)")
@@ -318,10 +321,11 @@ def run_evaluation(
     emit(f"  Metric 2 – Denoising steps to first consistent theory")
     emit(f"    Evaluated on {n_consistent}/{len(theories)} theories that reached consistency")
     if consistent_steps:
-        emit(f"    Mean : {avg_steps:.1f}  Std : {std_steps:.1f}  (out of {max_steps} max steps)")
-        emit(f"    (lower is better; model converged faster)")
+        emit(f"    Absolute Steps: {avg_steps:.1f} steps (Average start_t was {avg_start:.1f})")
+        emit(f"    Normalized    : Used {avg_norm_pct:.1f}% ± {std_norm_pct:.1f}% of allocated starting steps")
+        emit(f"    (lower normalized % is better; model converged faster relative to its noise level)")
     else:
-        emit(f"    No theories reached consistency within {max_steps} steps.")
+        emit(f"    No theories reached consistency.")
     emit()
     emit(f"  Metric 3 – Consistency rate")
     emit(f"    {n_consistent} / {len(theories)} = {consistency_rate:.1f}%")
@@ -348,9 +352,7 @@ def main() -> None:
         help="Path to the .pt checkpoint file (default: latest in outputs/).",
     )
     parser.add_argument("--num_theories", type=int, default=500,
-                        help="Number of test theories (default: 100).")
-    parser.add_argument("--max_steps", type=int, default=None,
-                        help="Max denoising steps (default: NUM_TIMESTEPS from checkpoint config).")
+                        help="Number of test theories (default: 500).")
     args = parser.parse_args()
 
     # ── Locate checkpoint ─────────────────────────────────────────────────────
@@ -367,7 +369,6 @@ def main() -> None:
     M_base       = cfg["M_CLAUSES"]
     K           = cfg["K_STATES"]
     T           = cfg["NUM_TIMESTEPS"]
-    max_steps   = args.max_steps if args.max_steps is not None else T
 
     # Use the largest N/M seen during curriculum training (fallback to base values).
     n_stages = cfg.get("CURRICULUM_N_LITERALS", [])
@@ -380,7 +381,7 @@ def main() -> None:
         f"Config from checkpoint: base N={N_base}  base M={M_base}  K={K}  T={T}"
     )
     emit(
-        f"Evaluation sizes: max N={N}  max M={M}  max_steps={max_steps}"
+        f"Evaluation sizes: max N={N}  max M={M}  start_t: randomized [50, 250]"
     )
 
     device = torch.device("cpu")
@@ -406,7 +407,6 @@ def main() -> None:
         theories=theories,
         model=model,
         corrupt=corrupt,
-        max_steps=max_steps,
         device=device,
     )
 
