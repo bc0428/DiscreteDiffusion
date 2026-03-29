@@ -40,6 +40,7 @@ EPOCHS_PER_TRIAL = 20
 NUM_ROLLOUTS_PER_EPOCH = 16
 N_TRIALS = 50
 START_DENOISE_MIN, START_DENOISE_MAX = 50, 251  # Range for random starting corruption level (timestep)
+DATA_REGEN_INTERVAL = 2  # Generate fresh theories periodically
 
 
 def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, clause_mask_batch, update_model=True):
@@ -235,6 +236,18 @@ def objective(trial):
 
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
+
+        # Periodically regenerate the data to prevent overfitting
+        if epoch > 1 and (epoch - 1) % DATA_REGEN_INTERVAL == 0:
+            print(f"\n[Data Refresh] Regenerating fresh theories at Epoch {epoch}...")
+            train_loader, test_loader, _ = get_dataloaders(
+                num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
+                N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
+                batch_size=cfg["BATCH_SIZE"], train_ratio=0.8,
+                active_N=active_max_literals, min_active_N=active_min_literals,
+                min_clauses=active_min_clauses
+            )
+
         for x_0_batch, clause_mask in train_loader:
             run_tuning_rollouts(
                 model, corrupt, optimizer, device, params,

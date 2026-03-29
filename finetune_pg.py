@@ -34,6 +34,7 @@ NUM_EPOCHS = 5000
 NUM_ROLLOUTS_PER_EPOCH = 16
 SAVE_INTERVAL = 500  # Save a checkpoint every 500 epochs
 START_DENOISE_MIN, START_DENOISE_MAX = 50, 251
+DATA_REGEN_INTERVAL = 100  # Generate fresh theories every 100 epochs
 
 # Winning Hyperparameters from Optuna Trial 17
 PARAMS = {
@@ -134,8 +135,11 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, clause_ma
                     active_mask[b] = False
                     hits += 1
                 else:
-                    # 3. Critical Failure Penalty
-                    r = -params['massive_reward']
+                    # 3. Critical Failure Penalty (Only on final step)
+                    if t_step == 1:
+                        r = -params['massive_reward']
+                    else:
+                        r = 0.0
 
                 traj_rewards[b].append(r)
             x_t = x_t_minus_1
@@ -222,7 +226,7 @@ def main():
     _, active_max_clauses = resolve_curriculum_bounds(999, [], cfg["N_LITERALS"])
     active_min_clauses, active_max_clauses = resolve_curriculum_bounds(999, m_stages, cfg["M_CLAUSES"])
 
-    emit(f"Generating Datasets...")
+    emit(f"Generating Initial Datasets...")
     train_loader, test_loader, _ = get_dataloaders(
         num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
         N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
@@ -239,6 +243,17 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for epoch in range(1, NUM_EPOCHS + 1):
+
+        # Periodically regenerate the data to prevent overfitting
+        if epoch > 1 and (epoch - 1) % DATA_REGEN_INTERVAL == 0:
+            emit(f"\n[Data Refresh] Regenerating fresh theories at Epoch {epoch}...")
+            train_loader, test_loader, _ = get_dataloaders(
+                num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
+                N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
+                batch_size=cfg["BATCH_SIZE"], train_ratio=0.8,
+                active_N=cfg["N_LITERALS"], min_active_N=1, min_clauses=active_min_clauses
+            )
+
         tr_loss, tr_sr, tr_base, tr_chg, tr_net_e = 0.0, 0.0, 0.0, 0.0, 0.0
         batches = 0
 
