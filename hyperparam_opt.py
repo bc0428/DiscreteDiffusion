@@ -116,7 +116,16 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
                     change_pct = (total_changes / max(1.0, valid_cells_b)) * 100.0
 
                     edit_tax = params['change_penalty'] * change_pct
-                    r = gross_reward - edit_tax
+
+                    # 2. Empty Penalty (Anti-Erasure)
+                    empty_before = ((x_initial[b] == 0) * valid_mask_float[b]).sum().item()
+                    empty_after = ((x_0_pred[b] == 0) * valid_mask_float[b]).sum().item()
+                    net_empty_pct = ((empty_after - empty_before) / max(1.0, valid_cells_b)) * 100.0
+                    # only penalize positive changes (i.e. removing more than adding literals)
+                    empty_tax = params['empty_penalty'] * max(0.0, net_empty_pct)
+
+                    r = gross_reward - edit_tax - empty_tax
+
                     active_mask[b] = False
                     hits += 1
 
@@ -194,6 +203,7 @@ def objective(trial):
     params = {
         'lr': trial.suggest_float('lr', 1e-6, 5e-5, log=True),
         'change_penalty': trial.suggest_float('change_penalty', 0.5, 5.0, step=0.1),
+        'empty_penalty': trial.suggest_float('empty_penalty', 1.0, 10.0, step=0.5),
         'massive_reward': trial.suggest_float('massive_reward', 50.0, 200.0, step=5.0),
         'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 50.0, step=1.0),
     }
@@ -232,7 +242,7 @@ def objective(trial):
             )
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
-    test_sr_list, test_chg_list, test_e_bef_list, test_e_aft_list, test_net_list = [], [], [], [], []
+    test_sr_list, test_chg_list, test_e_bef_list, test_e_aft_list, test_net_e_list = [], [], [], [], []
 
     with torch.no_grad():
         for x_0_batch, clause_mask in test_loader:
@@ -246,7 +256,7 @@ def objective(trial):
             test_chg_list.append(chg)
             test_e_bef_list.append(e_bef)
             test_e_aft_list.append(e_aft)
-            test_net_list.append(e_aft - e_bef)
+            test_net_e_list.append(e_aft - e_bef)
 
     def mean_std(values):
         if not values: return 0.0, 0.0
@@ -255,35 +265,34 @@ def objective(trial):
         var = sum((x - mean) ** 2 for x in values) / (len(values) - 1)
         return mean, math.sqrt(var)
 
-    final_success_rate, final_sr_std = mean_std(test_sr_list)
-    final_chg, final_chg_std = mean_std(test_chg_list)
-    final_e_bef, final_e_bef_std = mean_std(test_e_bef_list)
-    final_e_aft, final_e_aft_std = mean_std(test_e_aft_list)
-    final_net_change, final_net_std = mean_std(test_net_list)
-    abs_empty_change = abs(final_net_change)
+    success_rate_mean, final_sr_std = mean_std(test_sr_list)
+    chg_mean, chg_std = mean_std(test_chg_list)
+    e_bef_mean, e_bef_std = mean_std(test_e_bef_list)
+    e_aft_mean, e_aft_std = mean_std(test_e_aft_list)
+    net_e_change_mean, net_e_change_std = mean_std(test_net_e_list)
 
     print(
-        f"Final TEST | SR: {final_success_rate:.1f} +/- {final_sr_std:.1f}% | "
-        f"Total Edit: {final_chg:.1f} +/- {final_chg_std:.1f}% | "
-        f"Empty: {final_e_bef:.1f} +/- {final_e_bef_std:.1f}% -> {final_e_aft:.1f} +/- {final_e_aft_std:.1f}% | "
-        f"Net: {final_net_change:+.1f} +/- {final_net_std:.1f}%"
+        f"Final TEST | SR: {success_rate_mean:.1f} +/- {final_sr_std:.1f}% | "
+        f"Total Edit: {chg_mean:.1f} +/- {chg_std:.1f}% | "
+        f"Empty: {e_bef_mean:.1f} +/- {e_bef_std:.1f}% -> {e_aft_mean:.1f} +/- {e_aft_std:.1f}% | "
+        f"Net: {net_e_change_mean:+.1f} +/- {net_e_change_std:.1f}%"
     )
 
     trial.set_user_attr("Success Rate Std %", final_sr_std)
-    trial.set_user_attr("Total Change %", final_chg)
-    trial.set_user_attr("Total Change Std %", final_chg_std)
-    trial.set_user_attr("Empty % Before", final_e_bef)
-    trial.set_user_attr("Empty % Before Std", final_e_bef_std)
-    trial.set_user_attr("Empty % After", final_e_aft)
-    trial.set_user_attr("Empty % After Std", final_e_aft_std)
-    trial.set_user_attr("Net Empty Change %", final_net_change)
-    trial.set_user_attr("Net Empty Change Std %", final_net_std)
+    trial.set_user_attr("Total Change %", chg_mean)
+    trial.set_user_attr("Total Change Std %", chg_std)
+    trial.set_user_attr("Empty % Before", e_bef_mean)
+    trial.set_user_attr("Empty % Before Std", e_bef_std)
+    trial.set_user_attr("Empty % After", e_aft_mean)
+    trial.set_user_attr("Empty % After Std", e_aft_std)
+    trial.set_user_attr("Net Empty Change %", net_e_change_mean)
+    trial.set_user_attr("Net Empty Change Std %", net_e_change_std)
 
     del model
     del optimizer
     torch.cuda.empty_cache()
 
-    return final_success_rate, final_chg, abs_empty_change
+    return success_rate_mean, chg_mean, max(0.0, net_e_change_mean)
 
 
 def main():
@@ -306,6 +315,7 @@ def main():
             "change_penalty": tr.params.get("change_penalty"),
             "massive_reward": tr.params.get("massive_reward"),
             "early_finish_bonus": tr.params.get("early_finish_bonus"),
+            "empty_penalty": tr.params.get("empty_penalty"),
             "success_rate_std_pct": tr.user_attrs.get("Success Rate Std %"),
             "total_change_pct": tr.user_attrs.get("Total Change %"),
             "total_change_std_pct": tr.user_attrs.get("Total Change Std %"),
@@ -320,7 +330,7 @@ def main():
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=[
             "trial", "state", "value", "lr", "change_penalty", "massive_reward", "early_finish_bonus",
-            "success_rate_std_pct", "total_change_pct", "total_change_std_pct",
+            "empty_penalty", "success_rate_std_pct", "total_change_pct", "total_change_std_pct",
             "empty_before_pct", "empty_before_std_pct", "empty_after_pct", "empty_after_std_pct",
             "net_empty_change_pct", "net_empty_change_std_pct"
         ])
