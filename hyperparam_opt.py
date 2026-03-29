@@ -350,7 +350,7 @@ def main():
         print(f"\nPareto Option #{i+1} (Trial {t.number}):")
         print(f"  Success Rate:  {t.values[0]:.2f}%")
         print(f"  Total Change:  {t.values[1]:.2f}%")
-        print(f"  Net Empty Chg: {t.values[2]:.2f}% (Absolute)")
+        print(f"  Net Empty Chg: {t.values[2]:.2f}% (after relu)")
         print("  Parameters:")
         for key, value in t.params.items():
             print(f"    {key}: {value:.5f}" if isinstance(value, float) else f"    {key}: {value}")
