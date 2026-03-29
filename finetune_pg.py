@@ -37,12 +37,21 @@ START_DENOISE_MIN, START_DENOISE_MAX = 50, 251
 
 # Winning Hyperparameters from Optuna Trial 17
 PARAMS = {
-    'lr': 1e-5,                     # Starting Learning Rate
+    'lr': 3.76e-5,                     # Starting Learning Rate
     'change_penalty': 1.0,          # The standard Edit Tax
     'empty_penalty': 4.5,           # The Anti-Erasure Tax
     'massive_reward': 195.0,        # Consistency Payout
-    'early_finish_bonus': 0.0,      # Focus purely on spatial edits
+    'early_finish_bonus': 47.0,      # Focus purely on spatial edits
 }
+
+# ==========================================
+# Logging Setup
+# ==========================================
+log_lines: list[str] = []
+
+def emit(msg: str) -> None:
+    print(msg)
+    log_lines.append(msg)
 
 
 def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, clause_mask_batch, update_model=True):
@@ -147,8 +156,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, clause_ma
         total_episode_return = sum(traj_rewards[b])
         returns = [total_episode_return for _ in traj_rewards[b]]
         batch_returns_lists.append(returns)
-        if returns:
-            all_returns.extend(returns)
+        if returns: all_returns.extend(returns)
 
     if not all_returns:
         return 0.0, 0.0, 0.0, total_change_pct, empty_pct_before, empty_pct_after, batch_size
@@ -165,8 +173,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, clause_ma
 
     for trans in saved_transitions:
         active_curr = trans['active_mask']
-        if not active_curr.any():
-            continue
+        if not active_curr.any(): continue
 
         with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
             logits = model(trans['x_t'], trans['t_tensor'], clause_mask=clause_mask)
@@ -194,7 +201,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, clause_ma
 
 
 def main():
-    print(f"Loading Base Checkpoint: {CHECKPOINT_PATH}")
+    emit(f"Loading Base Checkpoint: {CHECKPOINT_PATH}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     ckpt = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
@@ -215,7 +222,7 @@ def main():
     _, active_max_clauses = resolve_curriculum_bounds(999, [], cfg["N_LITERALS"])
     active_min_clauses, active_max_clauses = resolve_curriculum_bounds(999, m_stages, cfg["M_CLAUSES"])
 
-    print(f"Generating Datasets...")
+    emit(f"Generating Datasets...")
     train_loader, test_loader, _ = get_dataloaders(
         num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
         N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
@@ -223,13 +230,13 @@ def main():
         active_N=cfg["N_LITERALS"], min_active_N=1, min_clauses=active_min_clauses
     )
 
-    print("\nStarting RL Fine-Tuning...")
-    print(f"Epochs: {NUM_EPOCHS} | Rollouts/Epoch: {NUM_ROLLOUTS_PER_EPOCH} | Batch Size: {cfg['BATCH_SIZE']}")
-    print(f"Targeting SDEdit Revision Window: t in [50, 250]\n")
+    emit("\nStarting RL Fine-Tuning...")
+    emit(f"Epochs: {NUM_EPOCHS} | Rollouts/Epoch: {NUM_ROLLOUTS_PER_EPOCH} | Batch Size: {cfg['BATCH_SIZE']}")
+    emit(f"Targeting SDEdit Revision Window: t in [{START_DENOISE_MIN}, {START_DENOISE_MAX}]\n")
 
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path("outputs")
     out_dir.mkdir(exist_ok=True)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for epoch in range(1, NUM_EPOCHS + 1):
         tr_loss, tr_sr, tr_base, tr_chg, tr_net_e = 0.0, 0.0, 0.0, 0.0, 0.0
@@ -279,10 +286,10 @@ def main():
                 te_net_e /= te_batches
 
             current_lr = scheduler.get_last_lr()[0]
-            print(f"Epoch {epoch:04d}/{NUM_EPOCHS} | LR: {current_lr:.2e} | Loss: {tr_loss:7.2f} | BaseRet: {tr_base:7.2f}")
-            print(f"  Train -> SR: {tr_sr:6.2f}% | Edit: {tr_chg:6.2f}% | NetEmpty: {tr_net_e:+6.2f}%")
-            print(f"  Test  -> SR: {te_sr:6.2f}% | Edit: {te_chg:6.2f}% | NetEmpty: {te_net_e:+6.2f}%")
-            print("-" * 65)
+            emit(f"Epoch {epoch:04d}/{NUM_EPOCHS} | LR: {current_lr:.2e} | Loss: {tr_loss:7.2f} | BaseRet: {tr_base:7.2f}")
+            emit(f"  Train -> SR: {tr_sr:6.2f}% | Edit: {tr_chg:6.2f}% | NetEmpty: {tr_net_e:+6.2f}%")
+            emit(f"  Test  -> SR: {te_sr:6.2f}% | Edit: {te_chg:6.2f}% | NetEmpty: {te_net_e:+6.2f}%")
+            emit("-" * 65)
 
         # Periodic Checkpointing
         if epoch % SAVE_INTERVAL == 0:
@@ -295,17 +302,23 @@ def main():
                 "config": cfg,
                 "rl_params": PARAMS
             }, save_path)
-            print(f">>> Checkpoint saved: {save_path.name}")
+            emit(f">>> Checkpoint saved: {save_path.name}")
 
-    # Final Checkpoint
+    # Final Checkpoint and Log Persist
     final_path = out_dir / f"theory_denoiser_rl_{run_id}_FINAL.pt"
+    log_path = out_dir / f"finetune_log_{run_id}.txt"
+
     torch.save({
         "epoch": NUM_EPOCHS,
         "model_state_dict": model.state_dict(),
         "config": cfg,
         "rl_params": PARAMS
     }, final_path)
-    print(f"\nFinetuning Complete! Final model saved to {final_path}")
+
+    log_path.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+    emit(f"\nFinetuning Complete! Final model saved to {final_path}")
+    emit(f"Saved training log: {log_path}")
 
 if __name__ == "__main__":
     main()
