@@ -36,11 +36,11 @@ from main import (
 # Tuning Configuration
 # ==========================================
 CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
-EPOCHS_PER_TRIAL = 20
+EPOCHS_PER_TRIAL = 150
 NUM_ROLLOUTS_PER_EPOCH = 16
 N_TRIALS = 50
 START_DENOISE_MIN, START_DENOISE_MAX = 50, 251  # Range for random starting corruption level (timestep)
-DATA_REGEN_INTERVAL = 2  # Generate fresh theories periodically
+DATA_REGEN_INTERVAL = 20  # Generate fresh theories periodically
 
 
 def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, clause_mask_batch, update_model=True):
@@ -114,16 +114,20 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
 
                     valid_cells_b = valid_mask_float[b].sum().item() * model.N
                     total_changes = ((x_initial[b] != x_0_pred[b]) * valid_mask_float[b]).sum().item()
-                    change_pct = (total_changes / max(1.0, valid_cells_b)) * 100.0
 
-                    edit_tax = params['change_penalty'] * change_pct
+                    # 1. Edit Tax (NORMALIZED TO DECIMAL)
+                    change_ratio = total_changes / max(1.0, valid_cells_b)
+                    # Exponentiate the decimal, then scale up to the reward space
+                    edit_tax = params['change_penalty'] * (change_ratio ** 1.5) * 100.0
 
-                    # 2. Empty Penalty (Anti-Erasure)
+                    # 2. Empty Penalty (NORMALIZED TO DECIMAL)
                     empty_before = ((x_initial[b] == 0) * valid_mask_float[b]).sum().item()
                     empty_after = ((x_0_pred[b] == 0) * valid_mask_float[b]).sum().item()
-                    net_empty_pct = ((empty_after - empty_before) / max(1.0, valid_cells_b)) * 100.0
-                    # only penalize positive changes (i.e. removing more than adding literals)
-                    empty_tax = params['empty_penalty'] * max(0.0, net_empty_pct)
+
+                    net_empty_ratio = (empty_after - empty_before) / max(1.0, valid_cells_b)
+                    # Only penalize positive changes (erasure)
+                    net_empty_ratio = max(0.0, net_empty_ratio)
+                    empty_tax = params['empty_penalty'] * net_empty_ratio * 100.0
 
                     r = gross_reward - edit_tax - empty_tax
 
@@ -203,10 +207,10 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
 def objective(trial):
     params = {
         'lr': trial.suggest_float('lr', 1e-6, 5e-5, log=True),
-        'change_penalty': trial.suggest_float('change_penalty', 0.5, 5.0, step=0.1),
-        'empty_penalty': trial.suggest_float('empty_penalty', 1.0, 10.0, step=0.5),
-        'massive_reward': trial.suggest_float('massive_reward', 50.0, 200.0, step=5.0),
-        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 50.0, step=1.0),
+        'change_penalty': trial.suggest_float('change_penalty', 0.03, 0.5, log=True),
+        'empty_penalty': trial.suggest_float('empty_penalty', 2.0, 12.0, step=1.0),
+        'massive_reward': trial.suggest_float('massive_reward', 80.0, 260.0, step=20.0),
+        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 8.0, step=1.0),
     }
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -234,6 +238,9 @@ def objective(trial):
         min_clauses=active_min_clauses
     )
 
+    optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS_PER_TRIAL, eta_min=1e-6)
+
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
 
@@ -253,6 +260,7 @@ def objective(trial):
                 model, corrupt, optimizer, device, params,
                 x_0_batch=x_0_batch, clause_mask_batch=clause_mask, update_model=True
             )
+        scheduler.step()
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
     test_sr_list, test_chg_list, test_e_bef_list, test_e_aft_list, test_net_e_list = [], [], [], [], []
