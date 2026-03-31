@@ -486,13 +486,27 @@ def build_hyperparam_biggest_with_trajectories(
     return _build_splits_from_plans(plans=plans, max_workers=max_workers)
 
 
+def build_test_biggest_with_trajectories(
+        total_samples: int,
+        max_workers: int | None = None,
+) -> dict[str, list[dict[str, torch.Tensor | int]]]:
+    """
+    Build test dataset using ONLY the biggest theory size
+    (active N=N_LITERALS, clauses M=M_CLAUSES) and include corruption trajectories.
+    """
+    plans = {
+        "test": [(N_LITERALS, N_LITERALS, M_CLAUSES, M_CLAUSES, total_samples)],
+    }
+    return _build_splits_from_plans(plans=plans, max_workers=max_workers)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate offline train/val/test datasets in parallel.")
     parser.add_argument(
         "--mode",
-        choices=["default", "finetune_biggest", "hyperparam_biggest"],
+        choices=["default", "finetune_biggest", "hyperparam_biggest", "test_biggest"],
         default="default",
-        help="default: train/val/test curriculum dataset; finetune_biggest: max-size finetune train/val with trajectories.; hyperparam_biggest: max-size hyperparam train/val with trajectories.",
+        help="default: train/val/test curriculum dataset; finetune_biggest: max-size finetune train/val with trajectories; hyperparam_biggest: max-size hyperparam train/val with trajectories; test_biggest: max-size test set with trajectories.",
     )
     parser.add_argument(
         "--max-workers",
@@ -511,6 +525,12 @@ if __name__ == "__main__":
         type=int,
         default=12800,
         help="Total hyperparam samples when --mode hyperparam_biggest (default: 12800, same as finetune for fair comparison).",
+    )
+    parser.add_argument(
+        "--test-total",
+        type=int,
+        default=NUM_TEST,
+        help="Total test samples when --mode test_biggest (default: NUM_TEST).",
     )
     parser.add_argument(
         "--train-ratio",
@@ -554,7 +574,7 @@ if __name__ == "__main__":
         torch.save(finetune_train, OUTPUT_DIR / "finetune_train.pt")
         torch.save(finetune_val, OUTPUT_DIR / "finetune_val.pt")
         torch.save(finetune_all, OUTPUT_DIR / "finetune.pt")
-    else:
+    elif args.mode == "hyperparam_biggest":
         split_data = build_hyperparam_biggest_with_trajectories(
             total_samples=args.hyperparam_total,
             train_ratio=args.train_ratio,
@@ -573,6 +593,17 @@ if __name__ == "__main__":
         torch.save(hyperparam_train, OUTPUT_DIR / "hyperparam_train.pt")
         torch.save(hyperparam_val, OUTPUT_DIR / "hyperparam_val.pt")
         torch.save(hyperparam_all, OUTPUT_DIR / "hyperparam.pt")
+    else:
+        split_data = build_test_biggest_with_trajectories(
+            total_samples=args.test_total,
+            max_workers=args.max_workers,
+        )
+        test_data = split_data["test"]
+
+        print(f"\nFinal split sizes | test={len(test_data)}")
+
+        print("\nSaving datasets to disk...")
+        torch.save(test_data, OUTPUT_DIR / "test.pt")
 
     print(f"Success! Datasets saved to {OUTPUT_DIR.resolve()}")
 
