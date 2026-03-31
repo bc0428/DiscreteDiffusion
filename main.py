@@ -213,6 +213,76 @@ def get_dataloaders(num_samples: int, N: int, max_clauses: int,
     return train_loader, test_loader, data
 
 
+def _extract_clean_theory_from_offline_entry(entry: dict) -> torch.Tensor:
+    """Convert one offline sample entry into a variable-length clean theory tensor."""
+    clean = entry["clean"]
+    original_m = int(entry.get("original_m", clean.size(1)))
+    original_m = max(1, min(original_m, clean.size(1)))
+    return clean[:, :original_m].clone().long()
+
+
+def _count_active_n(theory: torch.Tensor) -> int:
+    """Active N is the number of variable rows with at least one present literal."""
+    return int((theory != 0).any(dim=1).sum().item())
+
+
+def _summarize_offline_curriculum(name: str, entries: list[dict],
+                                  n_stages: list[tuple[int, int]], m_stages: list[tuple[int, int]],
+                                  default_n: int, default_m: int) -> tuple[list[int], int]:
+    """Return per-stage counts and number of out-of-stage samples for one offline split."""
+    n_bounds = [resolve_curriculum_bounds(start_epoch, n_stages, default_n) for start_epoch, _ in n_stages]
+    m_bounds = [resolve_curriculum_bounds(start_epoch, m_stages, default_m) for start_epoch, _ in m_stages]
+
+    stage_counts = [0 for _ in n_bounds]
+    out_of_stage = 0
+
+    for entry in entries:
+        th = _extract_clean_theory_from_offline_entry(entry)
+        active_n = _count_active_n(th)
+        m_val = int(th.size(1))
+
+        assigned = False
+        for idx, ((n_min, n_max), (m_min, m_max)) in enumerate(zip(n_bounds, m_bounds)):
+            if n_min <= active_n <= n_max and m_min <= m_val <= m_max:
+                stage_counts[idx] += 1
+                assigned = True
+                break
+
+        if not assigned:
+            out_of_stage += 1
+
+    print(f"  [{name}] Offline curriculum stage counts: "
+          + ", ".join(f"S{idx + 1}:{cnt}" for idx, cnt in enumerate(stage_counts))
+          + f" | out-of-stage: {out_of_stage}")
+
+    return stage_counts, out_of_stage
+
+
+def get_offline_dataloaders(dataset_dir: str | Path, batch_size: int):
+    """Load pre-generated offline train/val splits and return dataloaders + clean-theory lists."""
+    dataset_dir = Path(dataset_dir)
+    train_path = dataset_dir / "train.pt"
+    val_path = dataset_dir / "val.pt"
+
+    if not train_path.exists() or not val_path.exists():
+        missing = [str(p) for p in [train_path, val_path] if not p.exists()]
+        raise FileNotFoundError(f"Missing offline dataset files: {missing}")
+
+    train_entries = torch.load(train_path, map_location="cpu", weights_only=False)
+    val_entries = torch.load(val_path, map_location="cpu", weights_only=False)
+
+    train_data = [_extract_clean_theory_from_offline_entry(e) for e in train_entries]
+    val_data = [_extract_clean_theory_from_offline_entry(e) for e in val_entries]
+
+    train_set = TheoryDataset(train_data)
+    val_set = TheoryDataset(val_data)
+
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, collate_fn=theory_collate_fn)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn)
+
+    return train_loader, val_loader, train_data + val_data, train_entries, val_entries
+
+
 def resolve_curriculum_max_clauses(epoch: int, stages: list[tuple[int, int]], default_max: int) -> int:
     """
     return curriculum maximum clauses.
@@ -259,7 +329,7 @@ def get_uniform_transition_matrix(beta, num_classes=3):
 
 
 class D3PMForwardCorruption(nn.Module):
-    def __init__(self, num_classes=3, num_timesteps=1000, lambda_aux=0.001):
+    def __init__(self, num_classes=3, num_timesteps=1000, lambda_aux=0.1):
         super().__init__()
         self.num_classes = num_classes
         self.num_timesteps = num_timesteps
@@ -646,7 +716,7 @@ def run_epoch(model, corrupt, dataloader, device, optimizer=None, compute_consis
 if __name__ == "__main__":
     # ── Hyperparameters ────────────────────────────────────────────────────────
     N_LITERALS = 10
-    M_CLAUSES = 20  # max number of clauses per theory
+    M_CLAUSES = 40  # max number of clauses per theory
     K_STATES = 3
     NUM_SAMPLES = 10000
     BATCH_SIZE = 16
@@ -657,6 +727,8 @@ if __name__ == "__main__":
     SANITY_CHECK_LIMIT = 200
     CONSISTENCY_CHECK_INTERVAL = 100
     DATA_REGEN_INTERVAL = 2
+    USE_OFFLINE_DATASET = True
+    OFFLINE_DATASET_DIR = "dataset"
 
     EPOCHS = 150
 
@@ -684,23 +756,39 @@ if __name__ == "__main__":
     # ── Build initial dataset & loaders ───────────────────────────────────────
     active_min_literals, active_max_literals = resolve_curriculum_bounds(1, CURRICULUM_N_STAGES, N_LITERALS)
     active_min_clauses, active_max_clauses = resolve_curriculum_bounds(1, CURRICULUM_M_STAGES, M_CLAUSES)
-    emit(
-        f"Generating {NUM_SAMPLES} consistent theories "
-        f"(active N range=[{active_min_literals},{active_max_literals}], global max N={N_LITERALS}, "
-        f"active M range=[{active_min_clauses},{active_max_clauses}], global max M={M_CLAUSES})..."
-    )
-    train_loader, test_loader, all_data = get_dataloaders(
-        num_samples=NUM_SAMPLES,
-        N=N_LITERALS,
-        max_clauses=active_max_clauses,
-        batch_size=BATCH_SIZE,
-        train_ratio=TRAIN_RATIO,
-        active_N=active_max_literals,
-        min_active_N=active_min_literals,
-        min_clauses=active_min_clauses,
-    )
-    train_count = int(NUM_SAMPLES * TRAIN_RATIO)
-    test_count = NUM_SAMPLES - train_count
+
+    if USE_OFFLINE_DATASET:
+        emit(f"Loading offline dataset from: {OFFLINE_DATASET_DIR}")
+        train_loader, test_loader, all_data, train_entries, val_entries = get_offline_dataloaders(
+            dataset_dir=OFFLINE_DATASET_DIR,
+            batch_size=BATCH_SIZE,
+        )
+        train_count = len(train_entries)
+        test_count = len(val_entries)
+
+        emit("Checking offline curriculum alignment for TRAIN/VAL splits...")
+        _summarize_offline_curriculum("TRAIN", train_entries, CURRICULUM_N_STAGES, CURRICULUM_M_STAGES,
+                                      N_LITERALS, M_CLAUSES)
+        _summarize_offline_curriculum("VAL", val_entries, CURRICULUM_N_STAGES, CURRICULUM_M_STAGES,
+                                      N_LITERALS, M_CLAUSES)
+    else:
+        emit(
+            f"Generating {NUM_SAMPLES} consistent theories "
+            f"(active N range=[{active_min_literals},{active_max_literals}], global max N={N_LITERALS}, "
+            f"active M range=[{active_min_clauses},{active_max_clauses}], global max M={M_CLAUSES})..."
+        )
+        train_loader, test_loader, all_data = get_dataloaders(
+            num_samples=NUM_SAMPLES,
+            N=N_LITERALS,
+            max_clauses=active_max_clauses,
+            batch_size=BATCH_SIZE,
+            train_ratio=TRAIN_RATIO,
+            active_N=active_max_literals,
+            min_active_N=active_min_literals,
+            min_clauses=active_min_clauses,
+        )
+        train_count = int(NUM_SAMPLES * TRAIN_RATIO)
+        test_count = NUM_SAMPLES - train_count
     emit(f"  Train batches : {len(train_loader)}  ({train_count} theories)")
     emit(f"  Test  batches : {len(test_loader)}  ({test_count} theories)")
 
@@ -720,23 +808,36 @@ if __name__ == "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     # ── Training + Evaluation loop ─────────────────────────────────────────────
-    current_stage_n_min = active_min_literals
-    current_stage_n_max = active_max_literals
-    current_stage_m_min = active_min_clauses
-    current_stage_m_max = active_max_clauses
+    if USE_OFFLINE_DATASET:
+        current_stage_n_min, current_stage_n_max = resolve_curriculum_bounds(1, CURRICULUM_N_STAGES, N_LITERALS)
+        current_stage_m_min, current_stage_m_max = resolve_curriculum_bounds(1, CURRICULUM_M_STAGES, M_CLAUSES)
+        emit("[Offline] Stage display follows curriculum bounds per epoch; data loader still contains mixed sizes.")
+    else:
+        current_stage_n_min = active_min_literals
+        current_stage_n_max = active_max_literals
+        current_stage_m_min = active_min_clauses
+        current_stage_m_max = active_max_clauses
 
     for epoch in range(1, EPOCHS + 1):
-        stage_n_min, stage_n_max = resolve_curriculum_bounds(epoch, CURRICULUM_N_STAGES, N_LITERALS)
-        stage_m_min, stage_m_max = resolve_curriculum_bounds(epoch, CURRICULUM_M_STAGES, M_CLAUSES)
+        if USE_OFFLINE_DATASET:
+            stage_n_min, stage_n_max = resolve_curriculum_bounds(epoch, CURRICULUM_N_STAGES, N_LITERALS)
+            stage_m_min, stage_m_max = resolve_curriculum_bounds(epoch, CURRICULUM_M_STAGES, M_CLAUSES)
+            current_stage_n_min, current_stage_n_max = stage_n_min, stage_n_max
+            current_stage_m_min, current_stage_m_max = stage_m_min, stage_m_max
+            stage_changed = False
+            periodic_refresh = False
+        else:
+            stage_n_min, stage_n_max = resolve_curriculum_bounds(epoch, CURRICULUM_N_STAGES, N_LITERALS)
+            stage_m_min, stage_m_max = resolve_curriculum_bounds(epoch, CURRICULUM_M_STAGES, M_CLAUSES)
 
-        stage_changed = (
-            stage_n_min != current_stage_n_min
-            or stage_n_max != current_stage_n_max
-            or stage_m_min != current_stage_m_min
-            or stage_m_max != current_stage_m_max
-        )
+            stage_changed = (
+                stage_n_min != current_stage_n_min
+                or stage_n_max != current_stage_n_max
+                or stage_m_min != current_stage_m_min
+                or stage_m_max != current_stage_m_max
+            )
 
-        periodic_refresh = DATA_REGEN_INTERVAL > 0 and (epoch % DATA_REGEN_INTERVAL == 0)
+            periodic_refresh = DATA_REGEN_INTERVAL > 0 and (epoch % DATA_REGEN_INTERVAL == 0)
 
         if stage_changed or periodic_refresh:
             current_stage_n_min = stage_n_min

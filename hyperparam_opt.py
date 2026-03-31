@@ -22,14 +22,13 @@ from pathlib import Path
 import optuna
 import torch
 from torch.amp import autocast
+from torch.utils.data import Dataset, DataLoader
 
 sys.path.insert(0, str(Path(__file__).parent))
 from main import (
     TheoryDenoiserNet,
     D3PMForwardCorruption,
-    get_dataloaders,
     is_consistent,
-    resolve_curriculum_bounds
 )
 
 # ==========================================
@@ -39,11 +38,102 @@ CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
 EPOCHS_PER_TRIAL = 150
 NUM_ROLLOUTS_PER_EPOCH = 16
 N_TRIALS = 50
-START_DENOISE_MIN, START_DENOISE_MAX = 50, 251  # Range for random starting corruption level (timestep)
-DATA_REGEN_INTERVAL = 20  # Generate fresh theories periodically
+START_DENOISE_TRAJ_PCT_MIN = 0.3  # Minimum trajectory progress to start denoising from (30%)
+START_DENOISE_TRAJ_PCT_MAX = 0.8  # Maximum trajectory progress to start denoising from (80%)
+DATASET_DIR = Path("dataset")
 
 
-def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, clause_mask_batch, update_model=True):
+def resolve_base_checkpoint() -> Path:
+    preferred = Path(CHECKPOINT_PATH)
+    if preferred.exists():
+        return preferred
+
+    candidates = sorted(Path("outputs").glob("theory_denoiser_*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if candidates:
+        return candidates[0]
+
+    raise FileNotFoundError(
+        f"No base checkpoint found. Expected '{CHECKPOINT_PATH}' or at least one outputs/theory_denoiser_*.pt"
+    )
+
+
+class HyperparamDataset(Dataset):
+    """Returns clean target + trajectory-selected start state for tuning rollouts."""
+    def __init__(self, data: list[dict], num_timesteps: int, start_traj_pct_min: float, start_traj_pct_max: float):
+        self.data = data
+        self.num_timesteps = int(max(2, num_timesteps))
+        self.start_traj_pct_min = max(0.0, min(1.0, float(start_traj_pct_min)))
+        self.start_traj_pct_max = max(0.0, min(1.0, float(start_traj_pct_max)))
+        if self.start_traj_pct_min > self.start_traj_pct_max:
+            self.start_traj_pct_min, self.start_traj_pct_max = self.start_traj_pct_max, self.start_traj_pct_min
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        entry = self.data[idx]
+        clean_theory = entry["clean"].clone().long()
+        corrupted = entry.get("corrupted", clean_theory).clone().long()
+        traj = entry.get("trajectory", None)
+
+        if isinstance(traj, torch.Tensor) and traj.ndim == 3 and traj.size(0) > 1:
+            max_idx = traj.size(0) - 1
+            sampled_pct = self.start_traj_pct_min + torch.rand(1).item() * (self.start_traj_pct_max - self.start_traj_pct_min)
+            idx_t = int(round(sampled_pct * max_idx))
+            idx_t = max(1, min(max_idx, idx_t))
+            start_state = traj[idx_t].clone().long()
+            progress = idx_t / max(1, max_idx)
+        else:
+            start_state = corrupted
+            progress = 1.0
+
+        mapped_t = int(round(progress * (self.num_timesteps - 1)))
+        start_t = max(1, min(self.num_timesteps - 1, mapped_t))
+
+        clause_mask = (clean_theory.sum(dim=0) != 0).bool()
+        return clean_theory, start_state, clause_mask, start_t
+
+
+def theory_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]):
+    """Collate function for HyperparamDataset."""
+    batch_size = len(batch)
+    N = batch[0][0].size(0)
+    max_m = max(clean.size(1) for clean, _, _, _ in batch)
+
+    x_0 = torch.zeros((batch_size, N, max_m), dtype=torch.long)
+    x_start = torch.zeros((batch_size, N, max_m), dtype=torch.long)
+    clause_mask = torch.zeros((batch_size, max_m), dtype=torch.bool)
+    start_t = torch.zeros((batch_size,), dtype=torch.long)
+
+    for b, (clean, start_state, mask, t_val) in enumerate(batch):
+        m_i = clean.size(1)
+        x_0[b, :, :m_i] = clean
+        x_start[b, :, :m_i] = start_state[:, :m_i]
+        clause_mask[b, :m_i] = mask
+        start_t[b] = int(t_val)
+
+    return x_0, x_start, clause_mask, start_t
+
+
+def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_min: float = None, start_pct_max: float = None):
+    if start_pct_min is None:
+        start_pct_min = START_DENOISE_TRAJ_PCT_MIN
+    if start_pct_max is None:
+        start_pct_max = START_DENOISE_TRAJ_PCT_MAX
+    """Load hyperparam train and val datasets from .pt files."""
+    train_data = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
+    val_data = torch.load(DATASET_DIR / "hyperparam_val.pt", weights_only=False)
+    
+    train_dataset = HyperparamDataset(train_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
+    val_dataset = HyperparamDataset(val_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=theory_collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn)
+    
+    return train_loader, val_loader
+
+
+def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, x_start_batch, clause_mask_batch, start_t_batch, update_model=True):
     if update_model:
         model.train()
     else:
@@ -52,14 +142,11 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
     batch_size = x_0_batch.size(0)
     clause_mask = clause_mask_batch.to(device)
     valid_mask_float = clause_mask.unsqueeze(1).float()
+    start_t_per_sample = start_t_batch.to(device).long()
+    max_start_t = int(start_t_per_sample.max().item())
 
-    # ── NEW: PARTIAL CORRUPTION (SDEdit Approach) ──
-    # Randomize starting corruption level between 50 and 250
-    start_t = torch.randint(START_DENOISE_MIN, START_DENOISE_MAX, (1,)).item()
-    t_start_tensor = torch.full((batch_size,), start_t, device=device, dtype=torch.long)
-
-    # Apply forward diffusion to create corrupted starting theories
-    x_t = corrupt.q_sample(x_0_batch.to(device), t_start_tensor, clause_mask=clause_mask)
+    # Start from offline MUC trajectory states instead of fresh q-sampled noise.
+    x_t = x_start_batch.to(device)
     x_t = x_t.masked_fill(~clause_mask.unsqueeze(1), 0)
 
     # Track states for our metrics and terminal rewards
@@ -74,32 +161,36 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
 
     # ── PHASE 1: NO-GRADIENT ROLLOUT ──
     with torch.no_grad():
-        # Only iterate down from our specific starting timestep
-        for t_step in reversed(range(1, start_t + 1)):
+        for t_step in reversed(range(1, max_start_t + 1)):
             if not active_mask.any():
                 break
+
+            step_active = active_mask & (start_t_per_sample >= t_step)
+            if not step_active.any():
+                continue
 
             t_tensor = torch.full((batch_size,), t_step, device=device, dtype=torch.long)
             saved_transitions.append({
                 'x_t': x_t.clone(),
                 't_tensor': t_tensor.clone(),
-                'active_mask': active_mask.clone()
+                'active_mask': step_active.clone()
             })
 
             logits = model(x_t, t_tensor, clause_mask=clause_mask)
             dist = torch.distributions.Categorical(logits=logits)
-            x_0_pred = dist.sample()
-            x_0_pred = x_0_pred.masked_fill(~clause_mask.unsqueeze(1), 0)
+            sampled = dist.sample().masked_fill(~clause_mask.unsqueeze(1), 0)
+            x_0_pred = torch.where(step_active.view(-1, 1, 1), sampled, x_t)
             saved_transitions[-1]['x_0_pred'] = x_0_pred.clone()
 
             if t_step > 1:
                 t_minus_1 = torch.full((batch_size,), t_step - 1, device=device, dtype=torch.long)
                 x_t_minus_1 = corrupt.q_sample(x_0_pred, t_minus_1, clause_mask=clause_mask)
+                x_t_minus_1 = torch.where(step_active.view(-1, 1, 1), x_t_minus_1, x_t)
             else:
                 x_t_minus_1 = x_0_pred
 
             for b in range(batch_size):
-                if not active_mask[b]:
+                if not step_active[b]:
                     continue
 
                 x_final[b] = x_0_pred[b].clone()
@@ -108,8 +199,9 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
 
                 # Terminal Reward Logic
                 if active_theory.numel() > 0 and is_consistent(active_theory):
-                    # Update denominator to start_t so the speed bonus scales correctly
-                    time_saved_pct = (t_step - 1) / start_t
+                    # Use per-sample starting step when starts are sampled from trajectories.
+                    start_t_b = max(1, int(start_t_per_sample[b].item()))
+                    time_saved_pct = (t_step - 1) / start_t_b
                     gross_reward = params['massive_reward'] + (params['early_finish_bonus'] * time_saved_pct)
 
                     valid_cells_b = valid_mask_float[b].sum().item() * model.N
@@ -133,6 +225,12 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, cl
 
                     active_mask[b] = False
                     hits += 1
+                else:
+                    # 3. Critical Failure Penalty (Only on final step)
+                    if t_step == 1:
+                        r = -params['massive_reward']
+                    else:
+                        r = 0.0
 
                 traj_rewards[b].append(r)
 
@@ -214,7 +312,7 @@ def objective(trial):
     }
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(CHECKPOINT_PATH, map_location="cpu", weights_only=False)
+    ckpt = torch.load(resolve_base_checkpoint(), map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
 
     model = TheoryDenoiserNet(N=cfg["N_LITERALS"], M=cfg["M_CLAUSES"], num_classes=cfg["K_STATES"],
@@ -225,40 +323,19 @@ def objective(trial):
     corrupt = D3PMForwardCorruption(num_classes=cfg["K_STATES"], num_timesteps=cfg["NUM_TIMESTEPS"]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
 
-    n_stages = cfg.get("CURRICULUM_N_STAGES", [(1, cfg["N_LITERALS"])])
-    m_stages = cfg.get("CURRICULUM_M_STAGES", cfg.get("CURRICULUM_STAGES", [(1, cfg["M_CLAUSES"])]))
-    active_min_literals, active_max_literals = resolve_curriculum_bounds(999, n_stages, cfg["N_LITERALS"])
-    active_min_clauses, active_max_clauses = resolve_curriculum_bounds(999, m_stages, cfg["M_CLAUSES"])
-
-    train_loader, test_loader, _ = get_dataloaders(
-        num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
-        N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
-        batch_size=cfg["BATCH_SIZE"], train_ratio=0.8,
-        active_N=active_max_literals, min_active_N=active_min_literals,
-        min_clauses=active_min_clauses
-    )
+    # Load fixed hyperparam datasets (same for all trials)
+    train_loader, val_loader = load_hyperparam_dataloaders(batch_size=cfg["BATCH_SIZE"], num_timesteps=cfg["NUM_TIMESTEPS"], start_pct_min=START_DENOISE_TRAJ_PCT_MIN, start_pct_max=START_DENOISE_TRAJ_PCT_MAX)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS_PER_TRIAL, eta_min=1e-6)
 
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-
-        # Periodically regenerate the data to prevent overfitting
-        if epoch > 1 and (epoch - 1) % DATA_REGEN_INTERVAL == 0:
-            print(f"\n[Data Refresh] Regenerating fresh theories at Epoch {epoch}...")
-            train_loader, test_loader, _ = get_dataloaders(
-                num_samples=NUM_ROLLOUTS_PER_EPOCH * cfg["BATCH_SIZE"],
-                N=cfg["N_LITERALS"], max_clauses=active_max_clauses,
-                batch_size=cfg["BATCH_SIZE"], train_ratio=0.8,
-                active_N=active_max_literals, min_active_N=active_min_literals,
-                min_clauses=active_min_clauses
-            )
-
-        for x_0_batch, clause_mask in train_loader:
+        for x_0_batch, x_start_batch, clause_mask, start_t_batch in train_loader:
             run_tuning_rollouts(
                 model, corrupt, optimizer, device, params,
-                x_0_batch=x_0_batch, clause_mask_batch=clause_mask, update_model=True
+                x_0_batch=x_0_batch, x_start_batch=x_start_batch, clause_mask_batch=clause_mask,
+                start_t_batch=start_t_batch, update_model=True
             )
         scheduler.step()
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
@@ -266,10 +343,11 @@ def objective(trial):
     test_sr_list, test_chg_list, test_e_bef_list, test_e_aft_list, test_net_e_list = [], [], [], [], []
 
     with torch.no_grad():
-        for x_0_batch, clause_mask in test_loader:
+        for x_0_batch, x_start_batch, clause_mask, start_t_batch in val_loader:
             _, sr, _, chg, e_bef, e_aft, bsz = run_tuning_rollouts(
                 model, corrupt, optimizer=None, device=device, params=params,
-                x_0_batch=x_0_batch, clause_mask_batch=clause_mask, update_model=False
+                x_0_batch=x_0_batch, x_start_batch=x_start_batch, clause_mask_batch=clause_mask,
+                start_t_batch=start_t_batch, update_model=False
             )
             if bsz == 0:
                 continue

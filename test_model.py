@@ -32,14 +32,13 @@ import argparse
 import sys
 from pathlib import Path
 from statistics import mean, stdev
-import random
 from collections import Counter
 
 import torch
 
 # ── import everything from the training module ────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
-from main import D3PMForwardCorruption, TheoryDenoiserNet, generate_consistent_theory, is_consistent
+from main import D3PMForwardCorruption, TheoryDenoiserNet, is_consistent
 
 # ==========================================
 # Logging Setup
@@ -55,22 +54,80 @@ def emit(msg: str = "") -> None:
 # ── default checkpoint (override with --checkpoint) ───────────────────────────
 CHECKPOINT_PATH: str | None = None   # e.g. "outputs/theory_denoiser_20260314_120000.pt"
 
+# ==========================================
+# Test Evaluation Configuration
+# ==========================================
+START_DENOISE_TRAJ_PCT_MIN = 0.3  # Minimum trajectory progress to start denoising from (30%)
+START_DENOISE_TRAJ_PCT_MAX = 0.8  # Maximum trajectory progress to start denoising from (80%)
 
-def generate_test_theory(max_N: int, max_M: int) -> tuple[torch.Tensor, int]:
-    target_N = random.randint(1, max_N)
-    target_M = random.randint(1, max_M)
 
-    theory = generate_consistent_theory(
-        N=max_N,                 # keep global row count for model compatibility
-        max_clauses=target_M,
-        active_N=target_N,
-        min_active_N=target_N,   # force sampled active variable count
-        min_clauses=target_M,    # force sampled clause count
-    )
+def _extract_theory_from_offline_entry(entry: dict) -> torch.Tensor:
+    """Extract corrupted state from offline dataset entry."""
+    if "corrupted" in entry:
+        source = entry["corrupted"]
+    elif "trajectory" in entry and isinstance(entry["trajectory"], torch.Tensor) and entry["trajectory"].ndim == 3:
+        source = entry["trajectory"][-1]
+    else:
+        source = entry["clean"]
 
-    # Pick a random starting timestep between 50 and 250 for partial corruption
-    start_t = random.randint(50, 250)
-    return theory, start_t
+    original_m = int(entry.get("original_m", source.size(1)))
+    original_m = max(1, min(original_m, source.size(1)))
+    return source[:, :original_m].clone().long()
+
+
+def _sample_trajectory_start(entry: dict, num_timesteps: int, min_pct: float, max_pct: float) -> int:
+    """Sample a start timestep based on trajectory progress within [min_pct, max_pct] range."""
+    traj = entry.get("trajectory", None)
+    
+    if isinstance(traj, torch.Tensor) and traj.ndim == 3 and traj.size(0) > 1:
+        max_idx = traj.size(0) - 1
+        sampled_pct = min_pct + torch.rand(1).item() * (max_pct - min_pct)
+        idx_t = int(round(sampled_pct * max_idx))
+        idx_t = max(1, min(max_idx, idx_t))
+        progress = idx_t / max(1, max_idx)
+    else:
+        progress = max_pct
+    
+    mapped_t = int(round(progress * (num_timesteps - 1)))
+    start_t = max(1, min(num_timesteps - 1, mapped_t))
+    return start_t
+
+
+def find_default_test_dataset() -> Path | None:
+    """Prefer outputs/test.pt, fallback to dataset/test.pt."""
+    candidates = [Path("outputs") / "test.pt", Path("dataset") / "test.pt"]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def load_test_theories_from_pt(
+    test_pt_path: Path,
+    num_timesteps: int,
+    start_pct_min: float = None,
+    start_pct_max: float = None,
+    max_items: int | None = None
+) -> list[tuple[torch.Tensor, int]]:
+    """Load test theories from offline .pt and sample trajectory-based start_t."""
+    if start_pct_min is None:
+        start_pct_min = START_DENOISE_TRAJ_PCT_MIN
+    if start_pct_max is None:
+        start_pct_max = START_DENOISE_TRAJ_PCT_MAX
+
+    entries = torch.load(test_pt_path, map_location="cpu", weights_only=False)
+    if not isinstance(entries, list):
+        raise ValueError(f"Expected list in {test_pt_path}, got {type(entries)}")
+
+    if max_items is not None:
+        entries = entries[:max_items]
+
+    theories: list[tuple[torch.Tensor, int]] = []
+    for entry in entries:
+        theory = _extract_theory_from_offline_entry(entry)
+        start_t = _sample_trajectory_start(entry, num_timesteps, start_pct_min, start_pct_max)
+        theories.append((theory, start_t))
+    return theories
 
 
 # ==========================================
@@ -131,19 +188,17 @@ def denoise_until_consistent(
     """
     model.eval()
 
+    input_consistent = is_consistent(theory)
+
     N, M = theory.shape
     # Build clause mask: all columns active (no padding for single theory)
     clause_mask = torch.ones(1, M, dtype=torch.bool, device=device)
 
-    # Batch-size-1 tensors
-    x_0_ref = theory.unsqueeze(0).to(device)           # (1, N, M)
+    # Batch-size-1 tensor: offline input is already the starting state for denoising
+    x_t = theory.unsqueeze(0).to(device)               # (1, N, M)
 
     with torch.no_grad():
-        # Start from partially noised sample using the clean theory as reference
-        t_max = torch.full((1,), start_t, device=device, dtype=torch.long)
-        x_t = corrupt.q_sample(x_0_ref, t_max, clause_mask=clause_mask)
-
-        # Capture the corrupted starting state to measure edits against it
+        # Capture the provided starting state to measure edits against it
         x_initial_cpu = x_t[0, :, clause_mask[0].cpu()].cpu().clone()
 
         steps_to_first = start_t
@@ -180,6 +235,7 @@ def denoise_until_consistent(
         rev = count_revision_steps(x_initial_cpu, final_theory)
 
     return {
+        "input_consistent": input_consistent,
         "consistent": reached_consistent,
         "steps_to_first": steps_to_first,
         "total_change_pct": rev["total_change_pct"],
@@ -242,7 +298,7 @@ def run_evaluation(
 
     emit(f"\n{'=' * 60}")
     emit(f"  {run_name}")
-    emit(f"  {len(theories)} theories  |  start_t: Randomized [50, 250]")
+    emit(f"  {len(theories)} theories  |  start_t: Randomized trajectory [{START_DENOISE_TRAJ_PCT_MIN:.1%}, {START_DENOISE_TRAJ_PCT_MAX:.1%}]")
     emit(f"{'=' * 60}")
 
     size_stats = _summarize_theory_sizes(theories)
@@ -262,6 +318,7 @@ def run_evaluation(
     emit(f"    Active M distribution: {m_dist_str}")
 
     all_consistent = []
+    all_input_consistent = []
     all_steps = []
     all_start_t = []
     all_total_change_pct = []
@@ -276,14 +333,17 @@ def run_evaluation(
             device=device,
         )
         all_consistent.append(result["consistent"])
+        all_input_consistent.append(result["input_consistent"])
         all_steps.append(result["steps_to_first"])
         all_start_t.append(start_t)
         all_total_change_pct.append(result["total_change_pct"])
         all_empty_change_pct.append(result["empty_change_pct"])
 
         status = "OK" if result["consistent"] else "NO"
+        input_status = "YES" if result["input_consistent"] else "NO"
         emit(
             f"  [{idx + 1:>4}] {status} "
+            f"input_consistent={input_status:<3}  "
             f"steps={result['steps_to_first']:>3}/{start_t:<3}  "
             f"total_change={result['total_change_pct']:>6.2f}%  "
             f"empty_change={result['empty_change_pct']:>+7.2f}%"
@@ -330,6 +390,8 @@ def run_evaluation(
     emit(f"  Metric 3 – Consistency rate")
     emit(f"    {n_consistent} / {len(theories)} = {consistency_rate:.1f}%")
     emit(f"    (higher is better)")
+    emit(f"  Input consistency (before model denoising/corruption step)")
+    emit(f"    {sum(all_input_consistent)} / {len(theories)} = {100.0 * sum(all_input_consistent) / len(theories):.1f}%")
     emit(f"{'=' * 60}")
 
 
@@ -353,6 +415,12 @@ def main() -> None:
     )
     parser.add_argument("--num_theories", type=int, default=500,
                         help="Number of test theories (default: 500).")
+    parser.add_argument(
+        "--test_pt",
+        type=str,
+        default=None,
+        help="Path to offline test.pt (default: outputs/test.pt, then dataset/test.pt).",
+    )
     args = parser.parse_args()
 
     # ── Locate checkpoint ─────────────────────────────────────────────────────
@@ -382,6 +450,7 @@ def main() -> None:
     )
     emit(
         f"Evaluation sizes: max N={N}  max M={M}  start_t: randomized [50, 250]"
+        f"Trajectory percent range: [{START_DENOISE_TRAJ_PCT_MIN:.1%}, {START_DENOISE_TRAJ_PCT_MAX:.1%}]  start_t approx: [{int(round(START_DENOISE_TRAJ_PCT_MIN * (T-1)))}, {int(round(START_DENOISE_TRAJ_PCT_MAX * (T-1)))}]"
     )
 
     device = torch.device("cpu")
@@ -395,15 +464,24 @@ def main() -> None:
     corrupt = D3PMForwardCorruption(num_classes=K, num_timesteps=T)
     corrupt.to(device)
 
-    emit(
-        f"\nGenerating {args.num_theories} SAT-consistent theories with randomized sizes "
-        f"(active N in [1,{N}], active M in [1,{M}])..."
+    test_pt_path = Path(args.test_pt) if args.test_pt else find_default_test_dataset()
+    if test_pt_path is None or not test_pt_path.exists():
+        emit("ERROR: No offline test dataset found. Pass --test_pt or create outputs/test.pt (or dataset/test.pt).")
+        sys.exit(1)
+
+    emit(f"\nLoading offline test theories from: {test_pt_path}")
+    theories = load_test_theories_from_pt(
+        test_pt_path,
+        num_timesteps=T,
+        start_pct_min=START_DENOISE_TRAJ_PCT_MIN,
+        start_pct_max=START_DENOISE_TRAJ_PCT_MAX,
+        max_items=args.num_theories
     )
-    theories = [generate_test_theory(N, M) for _ in range(args.num_theories)]
+    emit(f"Loaded {len(theories)} theories from offline dataset (with trajectory-sampled start_t)")
 
     # Run evaluation ONCE (prints to console and appends to log_lines automatically)
     run_evaluation(
-        run_name="Evaluation – Consistent theories with randomized active N/M",
+        run_name="Evaluation – Offline test.pt (corrupted endpoint as input)",
         theories=theories,
         model=model,
         corrupt=corrupt,
