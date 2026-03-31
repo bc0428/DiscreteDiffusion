@@ -1,0 +1,535 @@
+Loading checkpoint: outputs\theory_denoiser_20260331_115502.pt
+Config from checkpoint: base N=10  base M=40  K=3  T=1000
+Evaluation sizes: max N=10  max M=40  start_t: randomized [50, 250]Trajectory percent range: [30.0%, 80.0%]  start_t approx: [300, 799]
+
+Loading offline test theories from: dataset\test.pt
+Loaded 500 theories from offline dataset (with trajectory-sampled start_t)
+
+============================================================
+  Evaluation – Offline test.pt (corrupted endpoint as input)
+  500 theories  |  start_t: Randomized trajectory [30.0%, 80.0%]
+============================================================
+  Theory size stats (realized in this test set):
+    Active N (non-empty rows): min=10  max=10  mean=10.00  std=0.00
+    Active M (clauses):        min=40  max=40  mean=40.00  std=0.00
+    Active N distribution: 10:500
+    Active M distribution: 40:500
+  [   1] OK input_consistent=NO   steps=353/609  total_change= 58.75%  empty_change=  -8.25%
+  [   2] OK input_consistent=NO   steps= 23/310  total_change= 54.50%  empty_change=  -2.00%
+  [   3] OK input_consistent=NO   steps=492/732  total_change= 61.25%  empty_change=  -2.75%
+  [   4] OK input_consistent=NO   steps=500/739  total_change= 57.50%  empty_change=  -0.75%
+  [   5] OK input_consistent=NO   steps=317/567  total_change= 56.00%  empty_change=  +0.25%
+  [   6] OK input_consistent=NO   steps=417/674  total_change= 57.75%  empty_change=  +7.00%
+  [   7] OK input_consistent=NO   steps=402/659  total_change= 57.75%  empty_change= +11.75%
+  [   8] OK input_consistent=NO   steps=516/772  total_change= 55.75%  empty_change=  +1.50%
+  [   9] OK input_consistent=NO   steps=282/524  total_change= 64.75%  empty_change=  -6.25%
+  [  10] OK input_consistent=NO   steps=297/539  total_change= 58.75%  empty_change=  -3.50%
+  [  11] OK input_consistent=NO   steps=283/522  total_change= 61.50%  empty_change=  +3.00%
+  [  12] OK input_consistent=NO   steps=283/532  total_change= 61.50%  empty_change= +14.00%
+  [  13] OK input_consistent=NO   steps=186/432  total_change= 55.25%  empty_change=  +4.75%
+  [  14] OK input_consistent=NO   steps= 84/322  total_change= 55.00%  empty_change=  +7.25%
+  [  15] OK input_consistent=NO   steps=245/495  total_change= 65.25%  empty_change=  +1.00%
+  [  16] OK input_consistent=NO   steps= 63/332  total_change= 53.50%  empty_change=  +8.50%
+  [  17] OK input_consistent=NO   steps=253/509  total_change= 53.75%  empty_change=  -3.00%
+  [  18] OK input_consistent=NO   steps=426/632  total_change= 58.25%  empty_change=  +0.25%
+  [  19] OK input_consistent=NO   steps= 69/315  total_change= 55.25%  empty_change=  +0.50%
+  [  20] OK input_consistent=NO   steps=163/412  total_change= 62.00%  empty_change=  +6.00%
+  [  21] OK input_consistent=NO   steps=533/779  total_change= 61.50%  empty_change= -10.25%
+  [  22] OK input_consistent=NO   steps=331/579  total_change= 55.00%  empty_change=  +2.00%
+  [  23] OK input_consistent=NO   steps=377/627  total_change= 52.50%  empty_change= +13.25%
+  [  24] OK input_consistent=NO   steps=423/674  total_change= 62.00%  empty_change= -18.00%
+  [  25] OK input_consistent=NO   steps=402/644  total_change= 62.25%  empty_change= -17.00%
+  [  26] OK input_consistent=NO   steps=510/747  total_change= 52.25%  empty_change=  -2.00%
+  [  27] OK input_consistent=NO   steps=249/485  total_change= 58.75%  empty_change=  +8.75%
+  [  28] OK input_consistent=NO   steps=435/682  total_change= 56.50%  empty_change=  +5.00%
+  [  29] OK input_consistent=NO   steps=522/777  total_change= 54.50%  empty_change=  -6.25%
+  [  30] OK input_consistent=NO   steps=280/514  total_change= 56.00%  empty_change=  +5.00%
+  [  31] OK input_consistent=NO   steps=426/667  total_change= 57.50%  empty_change=  -5.75%
+  [  32] OK input_consistent=NO   steps=255/507  total_change= 53.50%  empty_change=  +8.50%
+  [  33] OK input_consistent=NO   steps=397/664  total_change= 58.75%  empty_change=  +0.25%
+  [  34] OK input_consistent=NO   steps=145/372  total_change= 55.50%  empty_change=  -1.75%
+  [  35] OK input_consistent=NO   steps=432/677  total_change= 61.25%  empty_change= -17.25%
+  [  36] OK input_consistent=NO   steps=316/562  total_change= 57.25%  empty_change=  +7.00%
+  [  37] OK input_consistent=NO   steps= 84/365  total_change= 53.50%  empty_change=  +6.25%
+  [  38] OK input_consistent=NO   steps=287/514  total_change= 59.00%  empty_change=  -2.25%
+  [  39] OK input_consistent=NO   steps=268/495  total_change= 56.50%  empty_change= +11.50%
+  [  40] OK input_consistent=NO   steps=103/360  total_change= 57.00%  empty_change=  -4.25%
+  [  41] OK input_consistent=NO   steps=177/420  total_change= 57.00%  empty_change=  +1.00%
+  [  42] OK input_consistent=NO   steps= 63/312  total_change= 57.75%  empty_change=  +6.00%
+  [  43] OK input_consistent=NO   steps=409/654  total_change= 60.75%  empty_change=  +9.75%
+  [  44] OK input_consistent=NO   steps=277/539  total_change= 56.50%  empty_change=  +7.00%
+  [  45] OK input_consistent=NO   steps=502/749  total_change= 54.50%  empty_change=  -4.00%
+  [  46] OK input_consistent=NO   steps=378/624  total_change= 62.25%  empty_change=  -5.25%
+  [  47] OK input_consistent=NO   steps=453/682  total_change= 55.50%  empty_change=  +6.25%
+  [  48] OK input_consistent=NO   steps=425/679  total_change= 55.75%  empty_change=  +2.75%
+  [  49] OK input_consistent=NO   steps=133/387  total_change= 58.00%  empty_change=  -4.25%
+  [  50] OK input_consistent=NO   steps=247/502  total_change= 60.50%  empty_change=  +7.00%
+  [  51] OK input_consistent=NO   steps=183/427  total_change= 58.75%  empty_change=  -2.75%
+  [  52] OK input_consistent=NO   steps=470/707  total_change= 60.75%  empty_change=  +3.25%
+  [  53] OK input_consistent=NO   steps= 86/335  total_change= 57.75%  empty_change=  -2.50%
+  [  54] OK input_consistent=NO   steps=159/422  total_change= 56.25%  empty_change=  +5.25%
+  [  55] OK input_consistent=NO   steps=476/709  total_change= 56.25%  empty_change= -15.75%
+  [  56] OK input_consistent=NO   steps=121/375  total_change= 57.25%  empty_change=  +0.25%
+  [  57] OK input_consistent=NO   steps=344/592  total_change= 55.75%  empty_change= +10.00%
+  [  58] OK input_consistent=NO   steps=113/340  total_change= 59.00%  empty_change=  -4.75%
+  [  59] OK input_consistent=NO   steps=269/534  total_change= 54.25%  empty_change=  +2.50%
+  [  60] OK input_consistent=NO   steps=383/627  total_change= 61.00%  empty_change=  +1.50%
+  [  61] OK input_consistent=NO   steps=201/442  total_change= 57.00%  empty_change=  +2.50%
+  [  62] OK input_consistent=NO   steps=329/567  total_change= 57.00%  empty_change=  -0.75%
+  [  63] OK input_consistent=NO   steps=351/589  total_change= 58.25%  empty_change=  +2.25%
+  [  64] OK input_consistent=NO   steps= 92/325  total_change= 61.25%  empty_change=  -1.75%
+  [  65] OK input_consistent=NO   steps=107/332  total_change= 59.25%  empty_change=  +2.50%
+  [  66] OK input_consistent=NO   steps=494/744  total_change= 57.50%  empty_change= +13.50%
+  [  67] OK input_consistent=NO   steps= 48/305  total_change= 57.75%  empty_change=  +1.00%
+  [  68] OK input_consistent=NO   steps=547/777  total_change= 56.75%  empty_change=  -1.00%
+  [  69] OK input_consistent=NO   steps=515/762  total_change= 55.00%  empty_change=  +3.50%
+  [  70] OK input_consistent=NO   steps=299/542  total_change= 57.75%  empty_change=  +3.50%
+  [  71] OK input_consistent=NO   steps=114/350  total_change= 58.75%  empty_change=  +2.25%
+  [  72] OK input_consistent=NO   steps=147/370  total_change= 56.50%  empty_change=  -4.50%
+  [  73] OK input_consistent=NO   steps=263/524  total_change= 57.00%  empty_change=  +4.75%
+  [  74] OK input_consistent=NO   steps=242/529  total_change= 55.75%  empty_change=  +7.50%
+  [  75] OK input_consistent=NO   steps=421/659  total_change= 54.50%  empty_change=  -2.75%
+  [  76] OK input_consistent=NO   steps=513/757  total_change= 59.75%  empty_change= +12.25%
+  [  77] OK input_consistent=NO   steps=162/410  total_change= 57.50%  empty_change= +13.00%
+  [  78] OK input_consistent=NO   steps=432/692  total_change= 56.00%  empty_change= +10.00%
+  [  79] OK input_consistent=NO   steps=544/797  total_change= 57.00%  empty_change=  -7.50%
+  [  80] OK input_consistent=NO   steps=422/677  total_change= 57.75%  empty_change=  +2.50%
+  [  81] OK input_consistent=NO   steps= 94/345  total_change= 59.50%  empty_change= +10.75%
+  [  82] OK input_consistent=NO   steps=410/664  total_change= 58.00%  empty_change=  -1.50%
+  [  83] OK input_consistent=NO   steps=355/597  total_change= 63.25%  empty_change= -12.75%
+  [  84] OK input_consistent=NO   steps=361/599  total_change= 57.75%  empty_change=  +6.00%
+  [  85] OK input_consistent=NO   steps=293/532  total_change= 59.00%  empty_change=  -4.00%
+  [  86] OK input_consistent=NO   steps=107/357  total_change= 56.75%  empty_change=  +2.50%
+  [  87] OK input_consistent=NO   steps=384/609  total_change= 61.25%  empty_change=  -6.50%
+  [  88] OK input_consistent=NO   steps=392/644  total_change= 62.00%  empty_change=  -3.75%
+  [  89] OK input_consistent=NO   steps=187/410  total_change= 55.75%  empty_change=  +2.75%
+  [  90] OK input_consistent=NO   steps=393/632  total_change= 62.50%  empty_change=  +9.25%
+  [  91] OK input_consistent=NO   steps= 67/322  total_change= 58.25%  empty_change= +10.00%
+  [  92] OK input_consistent=NO   steps=215/450  total_change= 57.00%  empty_change=  -0.75%
+  [  93] OK input_consistent=NO   steps=204/455  total_change= 56.50%  empty_change=  -4.50%
+  [  94] OK input_consistent=NO   steps=257/492  total_change= 57.25%  empty_change=  -3.75%
+  [  95] OK input_consistent=NO   steps=373/629  total_change= 58.50%  empty_change=  +1.00%
+  [  96] OK input_consistent=NO   steps=429/687  total_change= 60.00%  empty_change=  +1.75%
+  [  97] OK input_consistent=NO   steps=161/425  total_change= 55.75%  empty_change= +11.50%
+  [  98] OK input_consistent=NO   steps=156/420  total_change= 56.75%  empty_change=  +3.75%
+  [  99] OK input_consistent=NO   steps=349/592  total_change= 54.25%  empty_change=  +7.00%
+  [ 100] OK input_consistent=NO   steps=407/649  total_change= 55.00%  empty_change=  +0.75%
+  [ 101] OK input_consistent=NO   steps=435/669  total_change= 54.50%  empty_change=  +0.25%
+  [ 102] OK input_consistent=NO   steps=449/687  total_change= 59.00%  empty_change= -15.25%
+  [ 103] OK input_consistent=NO   steps=104/345  total_change= 50.75%  empty_change=  +1.75%
+  [ 104] OK input_consistent=NO   steps=507/762  total_change= 58.25%  empty_change=  +2.75%
+  [ 105] OK input_consistent=NO   steps=122/387  total_change= 65.75%  empty_change=  -3.75%
+  [ 106] OK input_consistent=NO   steps=115/367  total_change= 62.25%  empty_change= -12.50%
+  [ 107] OK input_consistent=NO   steps=207/447  total_change= 57.25%  empty_change=  +5.00%
+  [ 108] OK input_consistent=NO   steps=460/709  total_change= 60.50%  empty_change=  -2.75%
+  [ 109] OK input_consistent=NO   steps=491/739  total_change= 63.25%  empty_change=  -2.00%
+  [ 110] OK input_consistent=NO   steps=531/762  total_change= 62.25%  empty_change=  -5.00%
+  [ 111] OK input_consistent=NO   steps=140/387  total_change= 60.75%  empty_change=  +2.75%
+  [ 112] OK input_consistent=NO   steps=201/452  total_change= 59.00%  empty_change=  +0.50%
+  [ 113] OK input_consistent=NO   steps= 83/337  total_change= 56.50%  empty_change= -11.50%
+  [ 114] OK input_consistent=NO   steps=500/749  total_change= 57.25%  empty_change=  +6.75%
+  [ 115] OK input_consistent=NO   steps=374/622  total_change= 58.50%  empty_change=  -6.75%
+  [ 116] OK input_consistent=NO   steps=192/450  total_change= 57.50%  empty_change=  +4.75%
+  [ 117] OK input_consistent=NO   steps=290/527  total_change= 53.50%  empty_change=  -0.75%
+  [ 118] OK input_consistent=NO   steps=213/467  total_change= 60.00%  empty_change=  -5.75%
+  [ 119] OK input_consistent=NO   steps=100/337  total_change= 58.00%  empty_change=  +0.25%
+  [ 120] OK input_consistent=NO   steps=519/772  total_change= 61.50%  empty_change=  -4.75%
+  [ 121] OK input_consistent=NO   steps=338/594  total_change= 59.50%  empty_change= +13.00%
+  [ 122] OK input_consistent=NO   steps=496/727  total_change= 61.25%  empty_change=  -2.25%
+  [ 123] OK input_consistent=NO   steps= 51/302  total_change= 63.25%  empty_change=  +1.25%
+  [ 124] OK input_consistent=NO   steps=313/549  total_change= 55.75%  empty_change=  -6.75%
+  [ 125] OK input_consistent=NO   steps=546/797  total_change= 61.00%  empty_change=  -2.25%
+  [ 126] OK input_consistent=NO   steps= 95/322  total_change= 57.25%  empty_change=  -3.00%
+  [ 127] OK input_consistent=NO   steps= 78/322  total_change= 60.50%  empty_change= -11.75%
+  [ 128] OK input_consistent=NO   steps=127/385  total_change= 60.25%  empty_change= -10.25%
+  [ 129] OK input_consistent=NO   steps=239/477  total_change= 58.00%  empty_change=  -8.75%
+  [ 130] OK input_consistent=NO   steps=469/714  total_change= 57.25%  empty_change=  +1.75%
+  [ 131] OK input_consistent=NO   steps=485/752  total_change= 57.75%  empty_change=  +6.00%
+  [ 132] OK input_consistent=NO   steps=371/629  total_change= 63.75%  empty_change=  +3.00%
+  [ 133] OK input_consistent=NO   steps=512/754  total_change= 59.75%  empty_change=  +3.75%
+  [ 134] OK input_consistent=NO   steps=230/465  total_change= 56.75%  empty_change=  +0.25%
+  [ 135] OK input_consistent=NO   steps=403/637  total_change= 61.25%  empty_change=  +1.00%
+  [ 136] OK input_consistent=NO   steps=541/779  total_change= 59.75%  empty_change=  -6.50%
+  [ 137] OK input_consistent=NO   steps=470/684  total_change= 54.00%  empty_change=  +1.00%
+  [ 138] OK input_consistent=NO   steps=359/587  total_change= 62.25%  empty_change=  +6.25%
+  [ 139] OK input_consistent=NO   steps=277/514  total_change= 61.25%  empty_change=  +3.75%
+  [ 140] OK input_consistent=NO   steps=333/582  total_change= 58.25%  empty_change=  -3.50%
+  [ 141] OK input_consistent=NO   steps=493/727  total_change= 59.50%  empty_change=  +7.00%
+  [ 142] OK input_consistent=NO   steps=431/672  total_change= 60.75%  empty_change=  -4.75%
+  [ 143] OK input_consistent=NO   steps=218/470  total_change= 56.00%  empty_change=  +0.25%
+  [ 144] OK input_consistent=NO   steps=457/684  total_change= 55.75%  empty_change=  -2.75%
+  [ 145] OK input_consistent=NO   steps=516/757  total_change= 58.50%  empty_change=  -2.50%
+  [ 146] OK input_consistent=NO   steps=179/432  total_change= 57.00%  empty_change=  -1.25%
+  [ 147] OK input_consistent=NO   steps=215/452  total_change= 62.25%  empty_change=  -1.25%
+  [ 148] OK input_consistent=NO   steps=397/617  total_change= 61.75%  empty_change=  +2.75%
+  [ 149] OK input_consistent=NO   steps=460/697  total_change= 54.75%  empty_change=  +2.50%
+  [ 150] OK input_consistent=NO   steps=144/410  total_change= 54.50%  empty_change=  -2.75%
+  [ 151] OK input_consistent=NO   steps=232/492  total_change= 56.00%  empty_change=  -7.50%
+  [ 152] OK input_consistent=NO   steps=521/774  total_change= 61.00%  empty_change=  -8.25%
+  [ 153] OK input_consistent=NO   steps= 74/320  total_change= 62.00%  empty_change=  -3.00%
+  [ 154] OK input_consistent=NO   steps=208/455  total_change= 59.75%  empty_change=  +7.25%
+  [ 155] OK input_consistent=NO   steps=497/759  total_change= 53.00%  empty_change=  +0.50%
+  [ 156] OK input_consistent=NO   steps=196/450  total_change= 58.25%  empty_change= +12.50%
+  [ 157] OK input_consistent=NO   steps=214/467  total_change= 54.25%  empty_change=  +9.75%
+  [ 158] OK input_consistent=NO   steps=470/702  total_change= 57.25%  empty_change=  +4.50%
+  [ 159] OK input_consistent=NO   steps=115/370  total_change= 61.75%  empty_change=  -1.50%
+  [ 160] OK input_consistent=NO   steps=398/624  total_change= 56.75%  empty_change=  -5.00%
+  [ 161] OK input_consistent=NO   steps=465/734  total_change= 57.25%  empty_change= +14.25%
+  [ 162] OK input_consistent=NO   steps=258/507  total_change= 62.50%  empty_change=  +1.00%
+  [ 163] OK input_consistent=NO   steps=212/455  total_change= 60.75%  empty_change=  -2.25%
+  [ 164] OK input_consistent=NO   steps=205/455  total_change= 53.00%  empty_change=  +5.75%
+  [ 165] OK input_consistent=NO   steps=559/789  total_change= 59.00%  empty_change=  +6.25%
+  [ 166] OK input_consistent=NO   steps=109/345  total_change= 59.00%  empty_change=  -0.50%
+  [ 167] OK input_consistent=NO   steps=101/347  total_change= 56.75%  empty_change= -14.00%
+  [ 168] OK input_consistent=NO   steps=219/445  total_change= 58.00%  empty_change=  -4.75%
+  [ 169] OK input_consistent=NO   steps=160/422  total_change= 53.00%  empty_change= +12.50%
+  [ 170] OK input_consistent=NO   steps=386/622  total_change= 55.25%  empty_change=  -1.00%
+  [ 171] OK input_consistent=NO   steps=489/752  total_change= 55.50%  empty_change=  +8.50%
+  [ 172] OK input_consistent=NO   steps=190/432  total_change= 54.75%  empty_change=  +2.00%
+  [ 173] OK input_consistent=NO   steps=459/694  total_change= 55.00%  empty_change=  +6.75%
+  [ 174] OK input_consistent=NO   steps=304/557  total_change= 52.50%  empty_change=  -0.50%
+  [ 175] OK input_consistent=NO   steps= 58/335  total_change= 60.25%  empty_change=  +2.25%
+  [ 176] OK input_consistent=NO   steps=472/717  total_change= 57.50%  empty_change=  +6.00%
+  [ 177] OK input_consistent=NO   steps=542/782  total_change= 55.00%  empty_change= +13.00%
+  [ 178] OK input_consistent=NO   steps=323/557  total_change= 54.75%  empty_change=  -8.00%
+  [ 179] OK input_consistent=NO   steps=377/632  total_change= 56.75%  empty_change=  +1.50%
+  [ 180] OK input_consistent=NO   steps=300/537  total_change= 60.75%  empty_change=  -1.25%
+  [ 181] OK input_consistent=NO   steps=331/572  total_change= 62.75%  empty_change=  -7.25%
+  [ 182] OK input_consistent=NO   steps= 97/350  total_change= 54.50%  empty_change=  +3.00%
+  [ 183] OK input_consistent=NO   steps=451/702  total_change= 52.75%  empty_change=  +4.00%
+  [ 184] OK input_consistent=NO   steps=266/504  total_change= 58.25%  empty_change= +15.50%
+  [ 185] OK input_consistent=NO   steps=439/679  total_change= 57.50%  empty_change=  +4.50%
+  [ 186] OK input_consistent=NO   steps= 93/347  total_change= 57.25%  empty_change=  -1.25%
+  [ 187] OK input_consistent=NO   steps=320/569  total_change= 57.25%  empty_change=  +2.50%
+  [ 188] OK input_consistent=NO   steps=245/504  total_change= 56.75%  empty_change= +10.25%
+  [ 189] OK input_consistent=NO   steps=196/440  total_change= 64.25%  empty_change= -11.75%
+  [ 190] OK input_consistent=NO   steps=214/447  total_change= 59.25%  empty_change=  +5.00%
+  [ 191] OK input_consistent=NO   steps=131/365  total_change= 58.75%  empty_change=  +3.25%
+  [ 192] OK input_consistent=NO   steps=211/452  total_change= 58.25%  empty_change=  +1.75%
+  [ 193] OK input_consistent=NO   steps=512/797  total_change= 55.50%  empty_change=  -2.50%
+  [ 194] OK input_consistent=NO   steps=463/697  total_change= 54.25%  empty_change=  -2.00%
+  [ 195] OK input_consistent=NO   steps=179/397  total_change= 58.75%  empty_change=  +2.00%
+  [ 196] OK input_consistent=NO   steps=254/497  total_change= 56.75%  empty_change=  -1.50%
+  [ 197] OK input_consistent=NO   steps=180/420  total_change= 54.50%  empty_change=  -1.25%
+  [ 198] OK input_consistent=NO   steps=136/397  total_change= 56.00%  empty_change= +14.25%
+  [ 199] OK input_consistent=NO   steps=417/682  total_change= 61.75%  empty_change=  +5.50%
+  [ 200] OK input_consistent=NO   steps=498/757  total_change= 60.75%  empty_change= -14.00%
+  [ 201] OK input_consistent=NO   steps=118/352  total_change= 61.50%  empty_change= -10.25%
+  [ 202] OK input_consistent=NO   steps=275/509  total_change= 65.50%  empty_change=  -6.25%
+  [ 203] OK input_consistent=NO   steps=132/377  total_change= 55.00%  empty_change=  +6.75%
+  [ 204] OK input_consistent=NO   steps=377/642  total_change= 59.75%  empty_change=  +8.50%
+  [ 205] OK input_consistent=NO   steps=501/737  total_change= 59.25%  empty_change=  -4.00%
+  [ 206] OK input_consistent=NO   steps= 84/322  total_change= 58.00%  empty_change= -14.25%
+  [ 207] OK input_consistent=NO   steps=468/742  total_change= 55.50%  empty_change=  +3.25%
+  [ 208] OK input_consistent=NO   steps=375/604  total_change= 61.50%  empty_change=  -8.75%
+  [ 209] OK input_consistent=NO   steps=125/390  total_change= 60.25%  empty_change=  +4.25%
+  [ 210] OK input_consistent=NO   steps=399/669  total_change= 59.00%  empty_change=  -3.75%
+  [ 211] OK input_consistent=NO   steps=150/392  total_change= 55.00%  empty_change=  -5.00%
+  [ 212] OK input_consistent=NO   steps=156/385  total_change= 59.00%  empty_change=  +0.25%
+  [ 213] OK input_consistent=NO   steps=230/462  total_change= 57.25%  empty_change=  -9.50%
+  [ 214] OK input_consistent=NO   steps=115/345  total_change= 58.25%  empty_change=  -5.25%
+  [ 215] OK input_consistent=NO   steps=363/609  total_change= 60.00%  empty_change=  -4.25%
+  [ 216] OK input_consistent=NO   steps=471/719  total_change= 55.00%  empty_change=  -1.00%
+  [ 217] OK input_consistent=NO   steps= 75/330  total_change= 58.75%  empty_change=  +4.50%
+  [ 218] OK input_consistent=NO   steps=136/360  total_change= 59.50%  empty_change=  -0.25%
+  [ 219] OK input_consistent=NO   steps=137/377  total_change= 56.00%  empty_change=  -3.50%
+  [ 220] OK input_consistent=NO   steps=293/529  total_change= 51.75%  empty_change=  -2.75%
+  [ 221] OK input_consistent=NO   steps=475/732  total_change= 54.75%  empty_change=  -3.25%
+  [ 222] OK input_consistent=NO   steps=207/465  total_change= 65.25%  empty_change=  -1.25%
+  [ 223] OK input_consistent=NO   steps= 97/335  total_change= 52.75%  empty_change=  -3.50%
+  [ 224] OK input_consistent=NO   steps= 91/332  total_change= 57.25%  empty_change=  -3.25%
+  [ 225] OK input_consistent=NO   steps=159/415  total_change= 58.50%  empty_change=  -2.00%
+  [ 226] OK input_consistent=NO   steps=102/337  total_change= 55.25%  empty_change=  -5.25%
+  [ 227] OK input_consistent=NO   steps=143/380  total_change= 54.00%  empty_change=  +1.75%
+  [ 228] OK input_consistent=NO   steps= 78/307  total_change= 60.75%  empty_change=  -4.25%
+  [ 229] OK input_consistent=NO   steps=298/534  total_change= 53.50%  empty_change=  +2.25%
+  [ 230] OK input_consistent=NO   steps=290/542  total_change= 57.75%  empty_change=  +1.25%
+  [ 231] OK input_consistent=NO   steps=265/517  total_change= 56.75%  empty_change=  +4.25%
+  [ 232] OK input_consistent=NO   steps=537/772  total_change= 56.25%  empty_change=  +9.75%
+  [ 233] OK input_consistent=NO   steps=298/554  total_change= 61.00%  empty_change=  +2.25%
+  [ 234] OK input_consistent=NO   steps=230/470  total_change= 55.50%  empty_change=  +3.00%
+  [ 235] OK input_consistent=NO   steps=510/747  total_change= 58.75%  empty_change=  +1.50%
+  [ 236] OK input_consistent=NO   steps=376/624  total_change= 58.75%  empty_change=  +4.00%
+  [ 237] OK input_consistent=NO   steps=326/574  total_change= 57.50%  empty_change= +13.75%
+  [ 238] OK input_consistent=NO   steps=234/462  total_change= 56.00%  empty_change=  -1.50%
+  [ 239] OK input_consistent=NO   steps=259/524  total_change= 59.00%  empty_change= +18.25%
+  [ 240] OK input_consistent=NO   steps=426/669  total_change= 55.75%  empty_change=  +1.00%
+  [ 241] OK input_consistent=NO   steps=411/669  total_change= 54.75%  empty_change= +11.75%
+  [ 242] OK input_consistent=NO   steps=541/782  total_change= 56.75%  empty_change=  +3.25%
+  [ 243] OK input_consistent=NO   steps=458/704  total_change= 55.00%  empty_change=  +2.50%
+  [ 244] OK input_consistent=NO   steps=314/574  total_change= 61.50%  empty_change=  +2.25%
+  [ 245] OK input_consistent=NO   steps=285/524  total_change= 61.75%  empty_change=  -3.25%
+  [ 246] OK input_consistent=NO   steps= 97/330  total_change= 58.25%  empty_change=  +7.75%
+  [ 247] OK input_consistent=NO   steps=110/350  total_change= 52.00%  empty_change= +10.00%
+  [ 248] OK input_consistent=NO   steps=321/572  total_change= 57.75%  empty_change=  -5.75%
+  [ 249] OK input_consistent=NO   steps=494/754  total_change= 53.50%  empty_change=  +1.75%
+  [ 250] OK input_consistent=NO   steps=134/377  total_change= 60.50%  empty_change=  -6.00%
+  [ 251] OK input_consistent=NO   steps=529/764  total_change= 62.50%  empty_change=  -4.75%
+  [ 252] OK input_consistent=NO   steps=260/509  total_change= 55.50%  empty_change=  -3.75%
+  [ 253] OK input_consistent=NO   steps= 86/325  total_change= 62.50%  empty_change= +12.25%
+  [ 254] OK input_consistent=NO   steps=461/694  total_change= 52.75%  empty_change=  +1.50%
+  [ 255] OK input_consistent=NO   steps=409/674  total_change= 53.75%  empty_change=  +9.50%
+  [ 256] OK input_consistent=NO   steps=309/577  total_change= 54.00%  empty_change=  +8.25%
+  [ 257] OK input_consistent=NO   steps=450/687  total_change= 60.50%  empty_change=  +1.50%
+  [ 258] OK input_consistent=NO   steps= 92/347  total_change= 55.50%  empty_change=  -2.25%
+  [ 259] OK input_consistent=NO   steps=470/722  total_change= 59.75%  empty_change=  -3.25%
+  [ 260] OK input_consistent=NO   steps= 62/317  total_change= 59.00%  empty_change=  -1.25%
+  [ 261] OK input_consistent=NO   steps=111/355  total_change= 58.50%  empty_change=  -6.00%
+  [ 262] OK input_consistent=NO   steps=345/594  total_change= 60.25%  empty_change=  -7.25%
+  [ 263] OK input_consistent=NO   steps=303/537  total_change= 57.75%  empty_change=  -5.00%
+  [ 264] OK input_consistent=NO   steps=121/365  total_change= 59.00%  empty_change=  +4.00%
+  [ 265] OK input_consistent=NO   steps=125/365  total_change= 51.00%  empty_change=  +1.25%
+  [ 266] OK input_consistent=NO   steps=143/392  total_change= 59.25%  empty_change=  +7.25%
+  [ 267] OK input_consistent=NO   steps=266/517  total_change= 53.00%  empty_change=  -0.50%
+  [ 268] OK input_consistent=NO   steps=443/672  total_change= 65.75%  empty_change= -13.75%
+  [ 269] OK input_consistent=NO   steps=536/797  total_change= 54.75%  empty_change=  +0.75%
+  [ 270] OK input_consistent=NO   steps=366/604  total_change= 55.75%  empty_change=  +1.00%
+  [ 271] OK input_consistent=NO   steps=227/452  total_change= 65.25%  empty_change= -23.50%
+  [ 272] OK input_consistent=NO   steps=383/617  total_change= 55.00%  empty_change=  -6.00%
+  [ 273] OK input_consistent=NO   steps=353/607  total_change= 56.75%  empty_change=  +6.25%
+  [ 274] OK input_consistent=NO   steps=169/410  total_change= 61.50%  empty_change=  -9.00%
+  [ 275] OK input_consistent=NO   steps=155/392  total_change= 53.75%  empty_change=  +2.00%
+  [ 276] OK input_consistent=NO   steps=338/567  total_change= 59.75%  empty_change=  -7.25%
+  [ 277] OK input_consistent=NO   steps= 80/310  total_change= 62.00%  empty_change=  -1.50%
+  [ 278] OK input_consistent=NO   steps=141/375  total_change= 62.50%  empty_change= -10.75%
+  [ 279] OK input_consistent=NO   steps=498/747  total_change= 58.00%  empty_change=  +2.50%
+  [ 280] OK input_consistent=NO   steps=236/495  total_change= 56.50%  empty_change=  +9.50%
+  [ 281] OK input_consistent=NO   steps=389/639  total_change= 60.50%  empty_change= -11.00%
+  [ 282] OK input_consistent=NO   steps=330/569  total_change= 54.25%  empty_change=  -0.75%
+  [ 283] OK input_consistent=NO   steps=371/619  total_change= 56.50%  empty_change=  +4.25%
+  [ 284] OK input_consistent=NO   steps=254/502  total_change= 53.75%  empty_change=  +1.75%
+  [ 285] OK input_consistent=NO   steps=364/597  total_change= 55.00%  empty_change=  +6.25%
+  [ 286] OK input_consistent=NO   steps=454/697  total_change= 55.00%  empty_change=  -1.00%
+  [ 287] OK input_consistent=NO   steps=552/794  total_change= 56.75%  empty_change=  -3.75%
+  [ 288] OK input_consistent=NO   steps=216/452  total_change= 57.50%  empty_change=  +1.00%
+  [ 289] OK input_consistent=NO   steps=319/554  total_change= 54.25%  empty_change=  +1.25%
+  [ 290] OK input_consistent=NO   steps=482/714  total_change= 53.50%  empty_change=  +1.25%
+  [ 291] OK input_consistent=NO   steps=404/669  total_change= 56.50%  empty_change=  -8.50%
+  [ 292] OK input_consistent=NO   steps=184/407  total_change= 57.25%  empty_change= +11.75%
+  [ 293] OK input_consistent=NO   steps=269/502  total_change= 55.75%  empty_change=  +1.00%
+  [ 294] OK input_consistent=NO   steps= 60/302  total_change= 53.50%  empty_change=  +7.25%
+  [ 295] OK input_consistent=NO   steps=138/392  total_change= 57.25%  empty_change=  -5.00%
+  [ 296] OK input_consistent=NO   steps=283/532  total_change= 56.50%  empty_change=  +4.50%
+  [ 297] OK input_consistent=NO   steps=165/432  total_change= 53.50%  empty_change=  +7.75%
+  [ 298] OK input_consistent=NO   steps=545/772  total_change= 60.25%  empty_change=  -1.75%
+  [ 299] OK input_consistent=NO   steps=168/405  total_change= 61.50%  empty_change=  -1.25%
+  [ 300] OK input_consistent=NO   steps=485/737  total_change= 59.25%  empty_change=  +0.25%
+  [ 301] OK input_consistent=NO   steps=312/542  total_change= 60.25%  empty_change=  +4.50%
+  [ 302] OK input_consistent=NO   steps=396/639  total_change= 51.50%  empty_change=  +6.50%
+  [ 303] OK input_consistent=NO   steps=543/784  total_change= 56.00%  empty_change=  +6.00%
+  [ 304] OK input_consistent=NO   steps=107/350  total_change= 56.25%  empty_change=  +4.50%
+  [ 305] OK input_consistent=NO   steps= 95/327  total_change= 63.25%  empty_change=  +6.00%
+  [ 306] OK input_consistent=NO   steps=225/460  total_change= 60.25%  empty_change=  -0.25%
+  [ 307] OK input_consistent=NO   steps=487/732  total_change= 54.50%  empty_change=  -0.50%
+  [ 308] OK input_consistent=NO   steps=176/415  total_change= 55.25%  empty_change=  -5.50%
+  [ 309] OK input_consistent=NO   steps= 95/352  total_change= 57.50%  empty_change=  +1.25%
+  [ 310] OK input_consistent=NO   steps=385/632  total_change= 60.75%  empty_change=  -4.75%
+  [ 311] OK input_consistent=NO   steps=367/597  total_change= 57.00%  empty_change=  -2.00%
+  [ 312] OK input_consistent=NO   steps=197/430  total_change= 52.75%  empty_change=  +2.00%
+  [ 313] OK input_consistent=NO   steps=548/777  total_change= 60.25%  empty_change=  +0.25%
+  [ 314] OK input_consistent=NO   steps= 60/312  total_change= 55.50%  empty_change=  -6.50%
+  [ 315] OK input_consistent=NO   steps=384/609  total_change= 59.25%  empty_change=  +4.75%
+  [ 316] OK input_consistent=NO   steps=292/529  total_change= 60.25%  empty_change= -13.00%
+  [ 317] OK input_consistent=NO   steps=240/485  total_change= 57.50%  empty_change=  +6.50%
+  [ 318] OK input_consistent=NO   steps=245/504  total_change= 58.75%  empty_change=  -5.50%
+  [ 319] OK input_consistent=NO   steps=288/539  total_change= 59.50%  empty_change=  +2.25%
+  [ 320] OK input_consistent=NO   steps=260/512  total_change= 50.75%  empty_change=  -3.50%
+  [ 321] OK input_consistent=NO   steps=393/637  total_change= 58.75%  empty_change=  -4.00%
+  [ 322] OK input_consistent=NO   steps=334/587  total_change= 61.25%  empty_change=  -5.25%
+  [ 323] OK input_consistent=NO   steps=170/405  total_change= 56.00%  empty_change= -19.25%
+  [ 324] OK input_consistent=NO   steps=194/437  total_change= 56.75%  empty_change=  +1.00%
+  [ 325] OK input_consistent=NO   steps=477/724  total_change= 54.50%  empty_change=  +2.25%
+  [ 326] OK input_consistent=NO   steps= 80/307  total_change= 60.25%  empty_change=  -7.00%
+  [ 327] OK input_consistent=NO   steps=536/772  total_change= 64.00%  empty_change= -21.50%
+  [ 328] OK input_consistent=NO   steps=103/370  total_change= 57.25%  empty_change=  +8.00%
+  [ 329] OK input_consistent=NO   steps=199/432  total_change= 57.50%  empty_change=  +0.75%
+  [ 330] OK input_consistent=NO   steps=143/405  total_change= 57.50%  empty_change=  +3.75%
+  [ 331] OK input_consistent=NO   steps=260/509  total_change= 53.25%  empty_change=  +1.50%
+  [ 332] OK input_consistent=NO   steps=343/599  total_change= 58.25%  empty_change=  +9.25%
+  [ 333] OK input_consistent=NO   steps=213/447  total_change= 60.00%  empty_change=  -2.25%
+  [ 334] OK input_consistent=NO   steps= 44/307  total_change= 62.75%  empty_change=  -4.00%
+  [ 335] OK input_consistent=NO   steps=167/420  total_change= 53.75%  empty_change= +10.00%
+  [ 336] OK input_consistent=NO   steps=293/537  total_change= 57.50%  empty_change=  +7.00%
+  [ 337] OK input_consistent=NO   steps= 79/325  total_change= 50.50%  empty_change=  +2.00%
+  [ 338] OK input_consistent=NO   steps= 80/335  total_change= 58.00%  empty_change=  -4.25%
+  [ 339] OK input_consistent=NO   steps=481/739  total_change= 62.75%  empty_change=  -3.75%
+  [ 340] OK input_consistent=NO   steps=501/762  total_change= 58.25%  empty_change=  +9.25%
+  [ 341] OK input_consistent=NO   steps= 75/322  total_change= 59.50%  empty_change=  -9.75%
+  [ 342] OK input_consistent=NO   steps=222/462  total_change= 61.00%  empty_change=  -6.25%
+  [ 343] OK input_consistent=NO   steps=323/577  total_change= 57.75%  empty_change=  +9.50%
+  [ 344] OK input_consistent=NO   steps=511/772  total_change= 65.50%  empty_change=  +0.50%
+  [ 345] OK input_consistent=NO   steps=374/612  total_change= 57.00%  empty_change=  +7.50%
+  [ 346] OK input_consistent=NO   steps=100/352  total_change= 58.00%  empty_change=  -1.25%
+  [ 347] OK input_consistent=NO   steps=160/402  total_change= 62.25%  empty_change=  -6.75%
+  [ 348] OK input_consistent=NO   steps=521/754  total_change= 61.75%  empty_change=  +2.75%
+  [ 349] OK input_consistent=NO   steps=109/367  total_change= 54.75%  empty_change=  +3.25%
+  [ 350] OK input_consistent=NO   steps=406/652  total_change= 57.50%  empty_change=  +5.00%
+  [ 351] OK input_consistent=NO   steps=513/757  total_change= 57.25%  empty_change=  -0.75%
+  [ 352] OK input_consistent=NO   steps=415/652  total_change= 64.50%  empty_change=  -1.75%
+  [ 353] OK input_consistent=NO   steps=152/387  total_change= 59.00%  empty_change=  -8.50%
+  [ 354] OK input_consistent=NO   steps=353/604  total_change= 55.00%  empty_change=  -7.25%
+  [ 355] OK input_consistent=NO   steps=129/375  total_change= 60.25%  empty_change=  +3.75%
+  [ 356] OK input_consistent=NO   steps=288/544  total_change= 58.25%  empty_change=  -1.50%
+  [ 357] OK input_consistent=NO   steps= 59/315  total_change= 58.75%  empty_change=  +2.25%
+  [ 358] OK input_consistent=NO   steps=501/739  total_change= 65.00%  empty_change=  -1.50%
+  [ 359] OK input_consistent=NO   steps=421/652  total_change= 60.00%  empty_change=  -6.50%
+  [ 360] OK input_consistent=NO   steps=231/492  total_change= 58.00%  empty_change=  -6.75%
+  [ 361] OK input_consistent=NO   steps=137/377  total_change= 57.25%  empty_change=  -3.25%
+  [ 362] OK input_consistent=NO   steps=104/347  total_change= 59.50%  empty_change=  -4.00%
+  [ 363] OK input_consistent=NO   steps=121/357  total_change= 62.50%  empty_change=  +4.75%
+  [ 364] OK input_consistent=NO   steps=450/704  total_change= 55.00%  empty_change=  +7.50%
+  [ 365] OK input_consistent=NO   steps=535/787  total_change= 60.75%  empty_change=  -0.50%
+  [ 366] OK input_consistent=NO   steps=507/774  total_change= 63.25%  empty_change=  +5.25%
+  [ 367] OK input_consistent=NO   steps=432/674  total_change= 64.75%  empty_change=  +2.75%
+  [ 368] OK input_consistent=NO   steps=307/537  total_change= 56.00%  empty_change=  +1.25%
+  [ 369] OK input_consistent=NO   steps=128/365  total_change= 58.00%  empty_change=  -8.25%
+  [ 370] OK input_consistent=NO   steps=424/667  total_change= 56.50%  empty_change=  -3.50%
+  [ 371] OK input_consistent=NO   steps=429/662  total_change= 58.75%  empty_change=  +9.25%
+  [ 372] OK input_consistent=NO   steps=565/794  total_change= 53.50%  empty_change=  -1.50%
+  [ 373] OK input_consistent=NO   steps=274/517  total_change= 56.50%  empty_change=  -3.25%
+  [ 374] OK input_consistent=NO   steps=551/794  total_change= 58.00%  empty_change=  +2.50%
+  [ 375] OK input_consistent=NO   steps=538/769  total_change= 64.00%  empty_change=  +3.50%
+  [ 376] OK input_consistent=NO   steps=443/699  total_change= 56.50%  empty_change=  +7.75%
+  [ 377] OK input_consistent=NO   steps=135/375  total_change= 56.75%  empty_change=  +3.50%
+  [ 378] OK input_consistent=NO   steps=552/794  total_change= 62.50%  empty_change=  +1.50%
+  [ 379] OK input_consistent=NO   steps= 82/365  total_change= 52.00%  empty_change=  +7.25%
+  [ 380] OK input_consistent=NO   steps=471/714  total_change= 63.25%  empty_change=  +0.25%
+  [ 381] OK input_consistent=NO   steps= 97/357  total_change= 60.25%  empty_change=  +5.75%
+  [ 382] OK input_consistent=NO   steps=434/679  total_change= 55.75%  empty_change=  +3.50%
+  [ 383] OK input_consistent=NO   steps=485/714  total_change= 63.50%  empty_change=  -4.50%
+  [ 384] OK input_consistent=NO   steps=512/747  total_change= 56.50%  empty_change=  -0.75%
+  [ 385] OK input_consistent=NO   steps=459/712  total_change= 55.75%  empty_change=  -0.25%
+  [ 386] OK input_consistent=NO   steps=209/447  total_change= 53.00%  empty_change=  +3.75%
+  [ 387] OK input_consistent=NO   steps=343/572  total_change= 56.50%  empty_change=  +5.00%
+  [ 388] OK input_consistent=NO   steps=257/502  total_change= 63.25%  empty_change=  -1.00%
+  [ 389] OK input_consistent=NO   steps=489/724  total_change= 60.00%  empty_change= -15.75%
+  [ 390] OK input_consistent=NO   steps=395/649  total_change= 60.00%  empty_change=  -3.75%
+  [ 391] OK input_consistent=NO   steps=515/759  total_change= 51.50%  empty_change= +11.75%
+  [ 392] OK input_consistent=NO   steps=532/774  total_change= 57.25%  empty_change=  +7.25%
+  [ 393] OK input_consistent=NO   steps= 64/315  total_change= 56.50%  empty_change=  +2.50%
+  [ 394] OK input_consistent=NO   steps=396/647  total_change= 55.50%  empty_change=  -0.25%
+  [ 395] OK input_consistent=NO   steps=219/475  total_change= 60.75%  empty_change=  +9.00%
+  [ 396] OK input_consistent=NO   steps=499/739  total_change= 60.00%  empty_change=  +1.75%
+  [ 397] OK input_consistent=NO   steps=121/362  total_change= 59.25%  empty_change=  -7.50%
+  [ 398] OK input_consistent=NO   steps= 87/320  total_change= 53.50%  empty_change= +10.75%
+  [ 399] OK input_consistent=NO   steps=307/564  total_change= 58.25%  empty_change=  -1.00%
+  [ 400] OK input_consistent=NO   steps=154/410  total_change= 57.50%  empty_change=  -2.25%
+  [ 401] OK input_consistent=NO   steps=309/557  total_change= 62.50%  empty_change=  -4.00%
+  [ 402] OK input_consistent=NO   steps=393/619  total_change= 59.75%  empty_change= -13.50%
+  [ 403] OK input_consistent=NO   steps=338/582  total_change= 55.50%  empty_change=  -9.25%
+  [ 404] OK input_consistent=NO   steps= 67/347  total_change= 54.00%  empty_change= +14.75%
+  [ 405] OK input_consistent=NO   steps=259/497  total_change= 56.00%  empty_change=  +4.75%
+  [ 406] OK input_consistent=NO   steps=182/435  total_change= 53.50%  empty_change= +13.50%
+  [ 407] OK input_consistent=NO   steps=110/352  total_change= 62.00%  empty_change= -11.00%
+  [ 408] OK input_consistent=NO   steps=203/435  total_change= 60.50%  empty_change=  -7.75%
+  [ 409] OK input_consistent=NO   steps=190/445  total_change= 57.00%  empty_change=  -3.25%
+  [ 410] OK input_consistent=NO   steps=547/784  total_change= 53.25%  empty_change=  -6.50%
+  [ 411] OK input_consistent=NO   steps=518/754  total_change= 64.00%  empty_change=  -2.75%
+  [ 412] OK input_consistent=NO   steps=177/425  total_change= 59.50%  empty_change=  +4.50%
+  [ 413] OK input_consistent=NO   steps=101/345  total_change= 55.75%  empty_change=  +5.50%
+  [ 414] OK input_consistent=NO   steps=199/437  total_change= 61.50%  empty_change=  -6.75%
+  [ 415] OK input_consistent=NO   steps=507/722  total_change= 60.75%  empty_change=  +2.50%
+  [ 416] OK input_consistent=NO   steps= 64/302  total_change= 59.25%  empty_change= -13.00%
+  [ 417] OK input_consistent=NO   steps= 75/312  total_change= 54.00%  empty_change=  -7.25%
+  [ 418] OK input_consistent=NO   steps=466/717  total_change= 58.50%  empty_change=  +3.00%
+  [ 419] OK input_consistent=NO   steps=527/767  total_change= 55.75%  empty_change=  +1.25%
+  [ 420] OK input_consistent=NO   steps=319/564  total_change= 59.75%  empty_change=  +2.75%
+  [ 421] OK input_consistent=NO   steps=406/642  total_change= 58.50%  empty_change= -11.75%
+  [ 422] OK input_consistent=NO   steps=116/345  total_change= 61.00%  empty_change=  +0.00%
+  [ 423] OK input_consistent=NO   steps=338/572  total_change= 62.25%  empty_change=  +2.00%
+  [ 424] OK input_consistent=NO   steps=416/637  total_change= 66.75%  empty_change= -12.00%
+  [ 425] OK input_consistent=NO   steps=240/470  total_change= 54.25%  empty_change=  -2.50%
+  [ 426] OK input_consistent=NO   steps=458/724  total_change= 54.75%  empty_change= +13.00%
+  [ 427] OK input_consistent=NO   steps=412/642  total_change= 57.00%  empty_change=  +1.75%
+  [ 428] OK input_consistent=NO   steps=266/517  total_change= 58.50%  empty_change=  +4.50%
+  [ 429] OK input_consistent=NO   steps=208/420  total_change= 54.75%  empty_change=  -3.25%
+  [ 430] OK input_consistent=NO   steps=415/659  total_change= 57.00%  empty_change= -12.50%
+  [ 431] OK input_consistent=NO   steps=229/482  total_change= 57.75%  empty_change=  +6.50%
+  [ 432] OK input_consistent=NO   steps= 74/320  total_change= 55.25%  empty_change=  +4.25%
+  [ 433] OK input_consistent=NO   steps=198/440  total_change= 58.00%  empty_change=  +3.50%
+  [ 434] OK input_consistent=NO   steps=322/572  total_change= 61.75%  empty_change=  -5.50%
+  [ 435] OK input_consistent=NO   steps=458/682  total_change= 61.25%  empty_change= -10.00%
+  [ 436] OK input_consistent=NO   steps=547/787  total_change= 59.75%  empty_change=  +5.75%
+  [ 437] OK input_consistent=NO   steps=455/707  total_change= 59.25%  empty_change=  +7.00%
+  [ 438] OK input_consistent=NO   steps= 33/302  total_change= 60.00%  empty_change=  +4.75%
+  [ 439] OK input_consistent=NO   steps=406/639  total_change= 63.25%  empty_change=  -3.25%
+  [ 440] OK input_consistent=NO   steps=461/694  total_change= 52.75%  empty_change=  -2.50%
+  [ 441] OK input_consistent=NO   steps=286/504  total_change= 61.75%  empty_change=  +1.25%
+  [ 442] OK input_consistent=NO   steps=277/534  total_change= 55.50%  empty_change= +11.75%
+  [ 443] OK input_consistent=NO   steps=375/612  total_change= 57.50%  empty_change=  +4.25%
+  [ 444] OK input_consistent=NO   steps=209/465  total_change= 55.00%  empty_change=  +9.75%
+  [ 445] OK input_consistent=NO   steps= 94/337  total_change= 61.00%  empty_change=  -9.75%
+  [ 446] OK input_consistent=NO   steps=448/684  total_change= 61.25%  empty_change=  -1.75%
+  [ 447] OK input_consistent=NO   steps=367/617  total_change= 57.75%  empty_change=  +9.25%
+  [ 448] OK input_consistent=NO   steps=119/365  total_change= 61.00%  empty_change=  +9.00%
+  [ 449] OK input_consistent=NO   steps=125/367  total_change= 55.50%  empty_change=  +8.75%
+  [ 450] OK input_consistent=NO   steps=412/654  total_change= 61.75%  empty_change=  +7.00%
+  [ 451] OK input_consistent=NO   steps=493/714  total_change= 62.75%  empty_change=  -2.25%
+  [ 452] OK input_consistent=NO   steps=517/774  total_change= 56.50%  empty_change=  -3.00%
+  [ 453] OK input_consistent=NO   steps=511/772  total_change= 52.25%  empty_change=  -0.50%
+  [ 454] OK input_consistent=NO   steps=489/727  total_change= 55.25%  empty_change=  +3.00%
+  [ 455] OK input_consistent=NO   steps=535/779  total_change= 59.25%  empty_change=  +9.75%
+  [ 456] OK input_consistent=NO   steps=163/412  total_change= 54.00%  empty_change=  -4.75%
+  [ 457] OK input_consistent=NO   steps=157/400  total_change= 64.75%  empty_change=  -3.25%
+  [ 458] OK input_consistent=NO   steps=549/792  total_change= 60.25%  empty_change=  -8.50%
+  [ 459] OK input_consistent=NO   steps=556/779  total_change= 58.00%  empty_change=  +2.75%
+  [ 460] OK input_consistent=NO   steps=339/592  total_change= 58.25%  empty_change=  -0.50%
+  [ 461] OK input_consistent=NO   steps=141/377  total_change= 64.75%  empty_change=  -2.25%
+  [ 462] OK input_consistent=NO   steps=504/752  total_change= 60.50%  empty_change=  -9.50%
+  [ 463] OK input_consistent=NO   steps=482/714  total_change= 58.50%  empty_change=  -1.25%
+  [ 464] OK input_consistent=NO   steps=411/647  total_change= 57.75%  empty_change= +10.50%
+  [ 465] OK input_consistent=NO   steps=353/594  total_change= 52.25%  empty_change=  +1.75%
+  [ 466] OK input_consistent=NO   steps=517/752  total_change= 55.50%  empty_change=  -2.00%
+  [ 467] OK input_consistent=NO   steps=201/427  total_change= 59.25%  empty_change=  -6.50%
+  [ 468] OK input_consistent=NO   steps=541/777  total_change= 57.00%  empty_change=  +0.25%
+  [ 469] OK input_consistent=NO   steps=165/400  total_change= 56.50%  empty_change=  +8.25%
+  [ 470] OK input_consistent=NO   steps=414/664  total_change= 57.00%  empty_change= +12.00%
+  [ 471] OK input_consistent=NO   steps=453/714  total_change= 60.00%  empty_change=  -0.50%
+  [ 472] OK input_consistent=NO   steps=329/584  total_change= 59.00%  empty_change=  -6.75%
+  [ 473] OK input_consistent=NO   steps=562/787  total_change= 54.75%  empty_change=  -1.00%
+  [ 474] OK input_consistent=NO   steps=417/664  total_change= 54.00%  empty_change=  -8.00%
+  [ 475] OK input_consistent=NO   steps=101/340  total_change= 58.25%  empty_change=  -0.25%
+  [ 476] OK input_consistent=NO   steps= 76/322  total_change= 60.25%  empty_change=  -5.00%
+  [ 477] OK input_consistent=NO   steps=108/362  total_change= 56.50%  empty_change=  -6.00%
+  [ 478] OK input_consistent=NO   steps=540/774  total_change= 56.50%  empty_change=  +2.00%
+  [ 479] OK input_consistent=NO   steps=384/617  total_change= 53.00%  empty_change=  +4.50%
+  [ 480] OK input_consistent=NO   steps=384/627  total_change= 54.00%  empty_change= +12.00%
+  [ 481] OK input_consistent=NO   steps=192/445  total_change= 61.00%  empty_change=  -7.25%
+  [ 482] OK input_consistent=NO   steps=525/752  total_change= 60.25%  empty_change=  +2.25%
+  [ 483] OK input_consistent=NO   steps=479/732  total_change= 54.25%  empty_change=  -4.75%
+  [ 484] OK input_consistent=NO   steps=548/797  total_change= 53.75%  empty_change=  +7.75%
+  [ 485] OK input_consistent=NO   steps=283/542  total_change= 58.25%  empty_change= +11.25%
+  [ 486] OK input_consistent=NO   steps= 94/355  total_change= 64.75%  empty_change=  -1.50%
+  [ 487] OK input_consistent=NO   steps= 55/310  total_change= 61.00%  empty_change=  +2.50%
+  [ 488] OK input_consistent=NO   steps=140/367  total_change= 60.75%  empty_change= -11.00%
+  [ 489] OK input_consistent=NO   steps=365/602  total_change= 59.50%  empty_change=  -0.50%
+  [ 490] OK input_consistent=NO   steps=460/704  total_change= 54.75%  empty_change=  -5.00%
+  [ 491] OK input_consistent=NO   steps=206/452  total_change= 56.00%  empty_change=  +7.75%
+  [ 492] OK input_consistent=NO   steps=474/722  total_change= 51.75%  empty_change=  -0.75%
+  [ 493] OK input_consistent=NO   steps=530/764  total_change= 55.25%  empty_change=  +7.00%
+  [ 494] OK input_consistent=NO   steps=202/450  total_change= 57.00%  empty_change=  +3.00%
+  [ 495] OK input_consistent=NO   steps=453/689  total_change= 60.25%  empty_change=  -2.00%
+  [ 496] OK input_consistent=NO   steps= 81/335  total_change= 57.50%  empty_change=  +4.50%
+  [ 497] OK input_consistent=NO   steps=549/797  total_change= 63.75%  empty_change=  -5.75%
+  [ 498] OK input_consistent=NO   steps=435/697  total_change= 49.00%  empty_change=  +3.50%
+  [ 499] OK input_consistent=NO   steps=338/587  total_change= 60.00%  empty_change=  -4.25%
+  [ 500] OK input_consistent=NO   steps=513/754  total_change= 58.25%  empty_change=  -2.25%
+
+  -- Summary ---------------------------------------------
+  Metric 1 - Revision percentages (corrupted vs final)
+    Total change % : mean=57.96%  std=3.14%
+    Empty change % : mean=+0.35%  std=6.60%
+    (positive empty change => more empty cells in final output)
+
+  Metric 2 – Denoising steps to first consistent theory
+    Evaluated on 500/500 theories that reached consistency
+    Absolute Steps: 305.7 steps (Average start_t was 550.4)
+    Normalized    : Used 51.6% ± 15.0% of allocated starting steps
+    (lower normalized % is better; model converged faster relative to its noise level)
+
+  Metric 3 – Consistency rate
+    500 / 500 = 100.0%
+    (higher is better)
+  Input consistency (before model denoising/corruption step)
+    0 / 500 = 0.0%
+============================================================
