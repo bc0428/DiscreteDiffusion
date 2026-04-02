@@ -268,20 +268,22 @@ def get_offline_dataloaders(dataset_dir: str | Path, batch_size: int):
         missing = [str(p) for p in [train_path, val_path] if not p.exists()]
         raise FileNotFoundError(f"Missing offline dataset files: {missing}")
 
+    print("Loading massive offline train dataset into RAM...", flush=True)
     train_entries = torch.load(train_path, map_location="cpu", weights_only=False)
+    train_clean = [_extract_clean_theory_from_offline_entry(e) for e in train_entries]
+
+    print("Loading massive offline val dataset into RAM...", flush=True)
     val_entries = torch.load(val_path, map_location="cpu", weights_only=False)
+    val_clean = [_extract_clean_theory_from_offline_entry(e) for e in val_entries]
 
-    train_data = [_extract_clean_theory_from_offline_entry(e) for e in train_entries]
-    val_data = [_extract_clean_theory_from_offline_entry(e) for e in val_entries]
+    train_set = TheoryDataset(train_clean)
+    val_set = TheoryDataset(val_clean)
 
-    train_set = TheoryDataset(train_data)
-    val_set = TheoryDataset(val_data)
+    # SET SHUFFLE TO FALSE: Load sequentially since the offline dataset is already randomized
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, collate_fn=theory_collate_fn)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn)
-
-    return train_loader, val_loader, train_data + val_data, train_entries, val_entries
-
+    return train_loader, val_loader, train_clean + val_clean, train_entries, val_entries
 
 def resolve_curriculum_max_clauses(epoch: int, stages: list[tuple[int, int]], default_max: int) -> int:
     """

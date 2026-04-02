@@ -103,11 +103,11 @@ def find_default_test_dataset() -> Path | None:
 
 
 def load_test_theories_from_pt(
-    test_pt_path: Path,
-    num_timesteps: int,
-    start_pct_min: float = None,
-    start_pct_max: float = None,
-    max_items: int | None = None
+        test_pt_path: Path,
+        num_timesteps: int,
+        start_pct_min: float = None,
+        start_pct_max: float = None,
+        max_items: int | None = None
 ) -> list[tuple[torch.Tensor, int]]:
     """Load test theories from offline .pt and sample trajectory-based start_t."""
     if start_pct_min is None:
@@ -115,7 +115,9 @@ def load_test_theories_from_pt(
     if start_pct_max is None:
         start_pct_max = START_DENOISE_TRAJ_PCT_MAX
 
+    emit(f"Loading offline test dataset into RAM from {test_pt_path}...")
     entries = torch.load(test_pt_path, map_location="cpu", weights_only=False)
+
     if not isinstance(entries, list):
         raise ValueError(f"Expected list in {test_pt_path}, got {type(entries)}")
 
@@ -123,10 +125,13 @@ def load_test_theories_from_pt(
         entries = entries[:max_items]
 
     theories: list[tuple[torch.Tensor, int]] = []
+
+    # This standard Python for-loop inherently reads and processes the data sequentially
     for entry in entries:
         theory = _extract_theory_from_offline_entry(entry)
         start_t = _sample_trajectory_start(entry, num_timesteps, start_pct_min, start_pct_max)
         theories.append((theory, start_t))
+
     return theories
 
 

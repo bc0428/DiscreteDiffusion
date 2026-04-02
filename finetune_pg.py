@@ -32,6 +32,7 @@ CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
 NUM_EPOCHS = 5000
 NUM_ROLLOUTS_PER_EPOCH = 16
 SAVE_INTERVAL = 500  # Save a checkpoint every 500 epochs
+VALIDATION_INTERVAL = 25000  # Run validation every N epochs
 START_DENOISE_TRAJ_PCT_MIN = 0.3  # Minimum trajectory progress to start denoising from (30%)
 START_DENOISE_TRAJ_PCT_MAX = 0.8  # Maximum trajectory progress to start denoising from (80%)
 DATASET_DIR = Path("dataset")
@@ -53,12 +54,25 @@ def resolve_base_checkpoint() -> Path:
 # Winning Hyperparameters from Optuna Trial 17
 PARAMS = {
     'lr': 3e-5,                     # Starting Learning Rate
-    'change_penalty': 0.17337,          # The standard Edit Tax
-    'empty_penalty': 12.0,           # The Anti-Erasure Tax
+    'change_penalty': 0.17337,      # The standard Edit Tax
+    'empty_penalty': 12.0,          # The Anti-Erasure Tax
     'massive_reward': 260.0,        # Consistency Payout
     'early_finish_bonus': 6.0,      # Focus purely on spatial edits
 }
 
+# ==========================================
+# Logging Setup (MOVED TO TOP FOR SCOPE)
+# ==========================================
+log_lines: list[str] = []
+
+def emit(msg: str) -> None:
+    print(msg)
+    log_lines.append(msg)
+
+
+# ==========================================
+# Data Handling & Globals
+# ==========================================
 class HyperparamDataset(Dataset):
     """Returns clean target + trajectory-selected start state for tuning rollouts."""
     def __init__(self, data: list[dict], num_timesteps: int, start_traj_pct_min: float, start_traj_pct_max: float):
@@ -68,10 +82,10 @@ class HyperparamDataset(Dataset):
         self.start_traj_pct_max = max(0.0, min(1.0, float(start_traj_pct_max)))
         if self.start_traj_pct_min > self.start_traj_pct_max:
             self.start_traj_pct_min, self.start_traj_pct_max = self.start_traj_pct_max, self.start_traj_pct_min
-    
+
     def __len__(self):
         return len(self.data)
-    
+
     def __getitem__(self, idx):
         entry = self.data[idx]
         clean_theory = entry["clean"].clone().long()
@@ -117,34 +131,46 @@ def theory_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor
     return x_0, x_start, clause_mask, start_t
 
 
+# GLOBAL CACHE TO PREVENT RAM EXPLOSION
+TRAIN_DATA_CACHE = None
+VAL_DATA_CACHE = None
+
 def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_min: float = None, start_pct_max: float = None):
+    global TRAIN_DATA_CACHE, VAL_DATA_CACHE
+
     if start_pct_min is None:
         start_pct_min = START_DENOISE_TRAJ_PCT_MIN
     if start_pct_max is None:
         start_pct_max = START_DENOISE_TRAJ_PCT_MAX
-    """Load hyperparam train and val datasets from .pt files."""
-    train_data = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
-    val_data = torch.load(DATASET_DIR / "hyperparam_val.pt", weights_only=False)
-    
-    train_dataset = HyperparamDataset(train_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
-    val_dataset = HyperparamDataset(val_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=theory_collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn)
-    
+
+    # ONLY load from disk if it hasn't been loaded yet
+    if TRAIN_DATA_CACHE is None:
+        emit("Loading massive hyperparam train dataset into RAM (This happens ONLY ONCE)...")
+        TRAIN_DATA_CACHE = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
+    if VAL_DATA_CACHE is None:
+        emit("Loading massive hyperparam val dataset into RAM (This happens ONLY ONCE)...")
+        VAL_DATA_CACHE = torch.load(DATASET_DIR / "hyperparam_val.pt", weights_only=False)
+
+    train_dataset = HyperparamDataset(TRAIN_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
+    val_dataset = HyperparamDataset(VAL_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
+
+    # SHUFFLE IS FALSE: Load sequentially since the dataset is already randomized in generation
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
+
     return train_loader, val_loader
 
 
+def get_infinite_batches(dataloader):
+    """Yields batches sequentially and loops back to the start automatically."""
+    while True:
+        for batch in dataloader:
+            yield batch
+
+
 # ==========================================
-# Logging Setup
+# Environment Step Logic
 # ==========================================
-log_lines: list[str] = []
-
-def emit(msg: str) -> None:
-    print(msg)
-    log_lines.append(msg)
-
-
 def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_batch, clause_mask_batch, start_t_batch, update_model=True):
     if update_model:
         model.train()
@@ -157,7 +183,6 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
     start_t_per_sample = start_t_batch.to(device).long()
     max_start_t = int(start_t_per_sample.max().item())
 
-    # Start from offline MUC trajectory states instead of fresh q_sample noise.
     x_t = x_start_batch.to(device)
     x_t = x_t.masked_fill(~clause_mask.unsqueeze(1), 0)
 
@@ -214,17 +239,15 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                     valid_cells_b = valid_mask_float[b].sum().item() * model.N
                     total_changes = ((x_initial[b] != x_0_pred[b]) * valid_mask_float[b]).sum().item()
 
-                    # 1. Edit Tax (NORMALIZED TO DECIMAL)
+                    # 1. Edit Tax
                     change_ratio = total_changes / max(1.0, valid_cells_b)
-                    # Exponentiate the decimal, then scale up to the reward space
                     edit_tax = params['change_penalty'] * (change_ratio ** 1.5) * 100.0
 
-                    # 2. Empty Penalty (NORMALIZED TO DECIMAL)
+                    # 2. Empty Penalty
                     empty_before = ((x_initial[b] == 0) * valid_mask_float[b]).sum().item()
                     empty_after = ((x_0_pred[b] == 0) * valid_mask_float[b]).sum().item()
 
                     net_empty_ratio = (empty_after - empty_before) / max(1.0, valid_cells_b)
-                    # Only penalize positive changes (erasure)
                     net_empty_ratio = max(0.0, net_empty_ratio)
                     empty_tax = params['empty_penalty'] * net_empty_ratio * 100.0
 
@@ -232,7 +255,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                     active_mask[b] = False
                     hits += 1
                 else:
-                    # 3. Critical Failure Penalty (Only on final step)
+                    # 3. Critical Failure Penalty
                     if t_step == 1:
                         r = -params['massive_reward']
                     else:
@@ -303,6 +326,9 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
     return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
 
+# ==========================================
+# Main Finetuning Loop
+# ==========================================
 def main():
     ckpt_path = resolve_base_checkpoint()
     emit(f"Loading Base Checkpoint: {ckpt_path}")
@@ -325,8 +351,12 @@ def main():
     emit(f"Loading Finetune Datasets from disk...")
     train_loader, test_loader = load_hyperparam_dataloaders(batch_size=cfg["BATCH_SIZE"], num_timesteps=cfg["NUM_TIMESTEPS"])
 
+    # INFINITE ITERATOR SETUP
+    batches_per_epoch = max(1, NUM_ROLLOUTS_PER_EPOCH // cfg["BATCH_SIZE"])
+    train_iter = iter(get_infinite_batches(train_loader))
+
     emit("\nStarting RL Fine-Tuning...")
-    emit(f"Epochs: {NUM_EPOCHS} | Rollouts/Epoch: {NUM_ROLLOUTS_PER_EPOCH} | Batch Size: {cfg['BATCH_SIZE']}")
+    emit(f"Epochs: {NUM_EPOCHS} | Rollouts/Epoch: {NUM_ROLLOUTS_PER_EPOCH} | Batch Size: {cfg['BATCH_SIZE']} | Batches/Epoch: {batches_per_epoch}")
     start_t_min = max(1, int(round(START_DENOISE_TRAJ_PCT_MIN * (cfg["NUM_TIMESTEPS"] - 1))))
     start_t_max = max(1, min(cfg["NUM_TIMESTEPS"] - 1, int(round(START_DENOISE_TRAJ_PCT_MAX * (cfg["NUM_TIMESTEPS"] - 1)))))
     emit(f"Trajectory start range: {START_DENOISE_TRAJ_PCT_MIN:.2f}-{START_DENOISE_TRAJ_PCT_MAX:.2f} (approx t={start_t_min}-{start_t_max}/{cfg['NUM_TIMESTEPS'] - 1})\n")
@@ -340,8 +370,10 @@ def main():
         tr_loss, tr_sr, tr_base, tr_chg, tr_net_e = 0.0, 0.0, 0.0, 0.0, 0.0
         batches = 0
 
-        # Training
-        for x_0_batch, x_start_batch, clause_mask, start_t_batch in train_loader:
+        # --- SEQUENTIAL TRAINING BATCHING ---
+        for _ in range(batches_per_epoch):
+            x_0_batch, x_start_batch, clause_mask, start_t_batch = next(train_iter)
+
             loss, sr, base, chg, e_bef, e_aft, bsz = run_rl_epoch(
                 model, corrupt, optimizer, device, PARAMS, x_0_batch, x_start_batch, clause_mask, start_t_batch, update_model=True
             )
@@ -363,8 +395,8 @@ def main():
             tr_chg /= batches
             tr_net_e /= batches
 
-        # Validation (Every 10 Epochs)
-        if epoch % 10 == 0:
+        # Validation (periodic)
+        if epoch % VALIDATION_INTERVAL == 0:
             te_sr, te_chg, te_net_e = 0.0, 0.0, 0.0
             te_batches = 0
             with torch.no_grad():

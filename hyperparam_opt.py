@@ -115,23 +115,39 @@ def theory_collate_fn(batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor
     return x_0, x_start, clause_mask, start_t
 
 
-def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_min: float = None, start_pct_max: float = None):
+# --- ADD THIS TO THE GLOBAL SCOPE (Above the function) ---
+TRAIN_DATA_CACHE = None
+VAL_DATA_CACHE = None
+
+def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_min: float = None,
+                                start_pct_max: float = None):
+    global TRAIN_DATA_CACHE, VAL_DATA_CACHE
+
     if start_pct_min is None:
         start_pct_min = START_DENOISE_TRAJ_PCT_MIN
     if start_pct_max is None:
         start_pct_max = START_DENOISE_TRAJ_PCT_MAX
-    """Load hyperparam train and val datasets from .pt files."""
-    train_data = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
-    val_data = torch.load(DATASET_DIR / "hyperparam_val.pt", weights_only=False)
-    
-    train_dataset = HyperparamDataset(train_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
-    val_dataset = HyperparamDataset(val_data, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=theory_collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn)
-    
-    return train_loader, val_loader
 
+    # ONLY load from disk if it hasn't been loaded yet
+    if TRAIN_DATA_CACHE is None:
+        print("Loading massive train dataset into RAM (This happens ONLY ONCE)...", flush=True)
+        TRAIN_DATA_CACHE = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
+    if VAL_DATA_CACHE is None:
+        print("Loading massive val dataset into RAM (This happens ONLY ONCE)...", flush=True)
+        VAL_DATA_CACHE = torch.load(DATASET_DIR / "hyperparam_val.pt", weights_only=False)
+
+    train_dataset = HyperparamDataset(TRAIN_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min,
+                                      start_traj_pct_max=start_pct_max)
+    val_dataset = HyperparamDataset(VAL_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min,
+                                    start_traj_pct_max=start_pct_max)
+
+    # SET SHUFFLE TO FALSE: Load sequentially since the dataset is already randomized
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn,
+                              num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn,
+                            num_workers=0)
+
+    return train_loader, val_loader
 
 def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, x_start_batch, clause_mask_batch, start_t_batch, update_model=True):
     if update_model:
@@ -301,14 +317,19 @@ def run_tuning_rollouts(model, corrupt, optimizer, device, params, x_0_batch, x_
 
     return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
+def get_infinite_batches(dataloader):
+    """Yields batches sequentially and loops back to the start automatically."""
+    while True:
+        for batch in dataloader:
+            yield batch
 
 def objective(trial):
     params = {
-        'lr': trial.suggest_float('lr', 1e-6, 5e-5, log=True),
-        'change_penalty': trial.suggest_float('change_penalty', 0.03, 0.5, log=True),
-        'empty_penalty': trial.suggest_float('empty_penalty', 2.0, 12.0, step=1.0),
-        'massive_reward': trial.suggest_float('massive_reward', 80.0, 260.0, step=20.0),
-        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 8.0, step=1.0),
+        'lr': trial.suggest_float('lr', 1e-6, 8e-5, log=True),
+        'change_penalty': trial.suggest_float('change_penalty', 0.01, 0.6, log=True),
+        'empty_penalty': trial.suggest_float('empty_penalty', 4.0, 16.0, step=1.0),
+        'massive_reward': trial.suggest_float('massive_reward', 120.0, 400.0, step=20.0),
+        'early_finish_bonus': trial.suggest_float('early_finish_bonus', 0.0, 16.0, step=1.0),
     }
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -321,22 +342,33 @@ def objective(trial):
     model.to(device)
 
     corrupt = D3PMForwardCorruption(num_classes=cfg["K_STATES"], num_timesteps=cfg["NUM_TIMESTEPS"]).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
 
-    # Load fixed hyperparam datasets (same for all trials)
-    train_loader, val_loader = load_hyperparam_dataloaders(batch_size=cfg["BATCH_SIZE"], num_timesteps=cfg["NUM_TIMESTEPS"], start_pct_min=START_DENOISE_TRAJ_PCT_MIN, start_pct_max=START_DENOISE_TRAJ_PCT_MAX)
+    train_loader, val_loader = load_hyperparam_dataloaders(
+        batch_size=cfg["BATCH_SIZE"],
+        num_timesteps=cfg["NUM_TIMESTEPS"],
+        start_pct_min=START_DENOISE_TRAJ_PCT_MIN,
+        start_pct_max=START_DENOISE_TRAJ_PCT_MAX
+    )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS_PER_TRIAL, eta_min=1e-6)
 
+    # Calculate how many batches make up one "Epoch" based on your rollout target
+    batches_per_epoch = max(1, NUM_ROLLOUTS_PER_EPOCH // cfg["BATCH_SIZE"])
+
+    # Create the persistent sequential iterator
+    train_iter = iter(get_infinite_batches(train_loader))
+
     print(f"\n--- Starting Trial {trial.number} ---")
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
-        for x_0_batch, x_start_batch, clause_mask, start_t_batch in train_loader:
+        for _ in range(batches_per_epoch):
+            x_0_batch, x_start_batch, clause_mask, start_t_batch = next(train_iter)
             run_tuning_rollouts(
                 model, corrupt, optimizer, device, params,
                 x_0_batch=x_0_batch, x_start_batch=x_start_batch, clause_mask_batch=clause_mask,
                 start_t_batch=start_t_batch, update_model=True
             )
+
         scheduler.step()
         print(f"Epoch {epoch}/{EPOCHS_PER_TRIAL} | TRAINING ONLY")
 
@@ -396,8 +428,22 @@ def objective(trial):
 
 def main():
     print("Starting Multi-Objective Bayesian Hyperparameter Optimization...")
-    study = optuna.create_study(directions=["maximize", "minimize", "minimize"])
-    study.optimize(objective, n_trials=N_TRIALS)
+
+    # 1. Create a database path in your outputs folder
+    output_dir = Path("outputs")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    db_path = output_dir / "optuna_d3pm_tuning.db"
+
+    # 2. Tell Optuna to use SQLite and load past results if they exist
+    study = optuna.create_study(
+        study_name="d3pm_theory_denoiser",
+        storage=f"sqlite:///{db_path}",
+        load_if_exists=True,
+        directions=["maximize", "minimize", "minimize"]
+    )
+
+    # 3. Run optimization
+    study.optimize(objective, n_trials=N_TRIALS, n_jobs=2)
 
     output_dir = Path("outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
