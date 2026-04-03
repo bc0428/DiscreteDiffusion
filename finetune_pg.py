@@ -1,7 +1,7 @@
 """
 finetune_pg.py
 ==============
-Fine-tunes the D3PM Theory Denoiser using Policy Gradient Reinforcement Learning.
+Fine-tunes the D3PM Theory Denoiser using Proximal Policy Optimization (PPO).
 Optimized for Minimal-Edit Theory Revision.
 """
 
@@ -32,7 +32,7 @@ CHECKPOINT_PATH = "outputs/theory_denoiser_base.pt"
 NUM_EPOCHS = 5000
 NUM_ROLLOUTS_PER_EPOCH = 16
 SAVE_INTERVAL = 500  # Save a checkpoint every 500 epochs
-VALIDATION_INTERVAL = 25000  # Run validation every N epochs
+VALIDATION_INTERVAL = 100  # Run validation every N epochs
 START_DENOISE_TRAJ_PCT_MIN = 0.3  # Minimum trajectory progress to start denoising from (30%)
 START_DENOISE_TRAJ_PCT_MAX = 0.8  # Maximum trajectory progress to start denoising from (80%)
 DATASET_DIR = Path("dataset")
@@ -51,17 +51,20 @@ def resolve_base_checkpoint() -> Path:
         f"No base checkpoint found. Expected '{CHECKPOINT_PATH}' or at least one outputs/theory_denoiser_*.pt"
     )
 
-# Winning Hyperparameters from Optuna Trial 17
+# Winning Hyperparameters from Optuna Trial + PPO Additions
 PARAMS = {
     'lr': 3e-5,                     # Starting Learning Rate
-    'change_penalty': 0.17337,      # The standard Edit Tax
-    'empty_penalty': 12.0,          # The Anti-Erasure Tax
-    'massive_reward': 260.0,        # Consistency Payout
-    'early_finish_bonus': 6.0,      # Focus purely on spatial edits
+    'change_penalty': 0.96309,      # The standard Edit Tax
+    'empty_penalty': 9.0,           # The Anti-Erasure Tax
+    'massive_reward': 300.0,        # Consistency Payout
+    'early_finish_bonus': 15.0,      # Focus purely on spatial edits
+    'ppo_epochs': 3,                # PPO Iterations per batch
+    'ppo_clip': 0.23676,                # PPO clipping epsilon
+    'entropy_coef': 0.00383            # PPO entropy bonus
 }
 
 # ==========================================
-# Logging Setup (MOVED TO TOP FOR SCOPE)
+# Logging Setup
 # ==========================================
 log_lines: list[str] = []
 
@@ -143,7 +146,6 @@ def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_m
     if start_pct_max is None:
         start_pct_max = START_DENOISE_TRAJ_PCT_MAX
 
-    # ONLY load from disk if it hasn't been loaded yet
     if TRAIN_DATA_CACHE is None:
         emit("Loading massive hyperparam train dataset into RAM (This happens ONLY ONCE)...")
         TRAIN_DATA_CACHE = torch.load(DATASET_DIR / "hyperparam_train.pt", weights_only=False)
@@ -154,7 +156,6 @@ def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_m
     train_dataset = HyperparamDataset(TRAIN_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
     val_dataset = HyperparamDataset(VAL_DATA_CACHE, num_timesteps=num_timesteps, start_traj_pct_min=start_pct_min, start_traj_pct_max=start_pct_max)
 
-    # SHUFFLE IS FALSE: Load sequentially since the dataset is already randomized in generation
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=theory_collate_fn, num_workers=0)
 
@@ -162,14 +163,13 @@ def load_hyperparam_dataloaders(batch_size: int, num_timesteps: int, start_pct_m
 
 
 def get_infinite_batches(dataloader):
-    """Yields batches sequentially and loops back to the start automatically."""
     while True:
         for batch in dataloader:
             yield batch
 
 
 # ==========================================
-# Environment Step Logic
+# Environment Step Logic (PPO)
 # ==========================================
 def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_batch, clause_mask_batch, start_t_batch, update_model=True):
     if update_model:
@@ -194,6 +194,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
     traj_rewards = [[] for _ in range(batch_size)]
     hits = 0
 
+    # ── PHASE 1: NO-GRADIENT ROLLOUT ──
     with torch.no_grad():
         for t_step in reversed(range(1, max_start_t + 1)):
             if not active_mask.any():
@@ -204,17 +205,22 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                 continue
 
             t_tensor = torch.full((batch_size,), t_step, device=device, dtype=torch.long)
-            saved_transitions.append({
-                'x_t': x_t.clone(),
-                't_tensor': t_tensor.clone(),
-                'active_mask': step_active.clone()
-            })
 
             logits = model(x_t, t_tensor, clause_mask=clause_mask)
             dist = torch.distributions.Categorical(logits=logits)
             sampled = dist.sample().masked_fill(~clause_mask.unsqueeze(1), 0)
             x_0_pred = torch.where(step_active.view(-1, 1, 1), sampled, x_t)
-            saved_transitions[-1]['x_0_pred'] = x_0_pred.clone()
+
+            # Store old log-prob per cell for stable PPO ratios later.
+            old_log_prob = dist.log_prob(x_0_pred).detach()
+
+            saved_transitions.append({
+                'x_t': x_t.clone(),
+                't_tensor': t_tensor.clone(),
+                'active_mask': step_active.clone(),
+                'x_0_pred': x_0_pred.clone(),
+                'old_log_prob': old_log_prob.clone()
+            })
 
             if t_step > 1:
                 t_minus_1 = torch.full((batch_size,), t_step - 1, device=device, dtype=torch.long)
@@ -230,7 +236,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                 x_final[b] = x_0_pred[b].clone()
                 active_theory = x_0_pred[b, :, clause_mask[b]].detach().cpu()
 
-                # --- TERMINAL REWARD LOGIC ---
+                # Reward Logic
                 if active_theory.numel() > 0 and is_consistent(active_theory):
                     start_t_b = max(1, int(start_t_per_sample[b].item()))
                     time_saved_pct = (t_step - 1) / start_t_b
@@ -239,11 +245,9 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                     valid_cells_b = valid_mask_float[b].sum().item() * model.N
                     total_changes = ((x_initial[b] != x_0_pred[b]) * valid_mask_float[b]).sum().item()
 
-                    # 1. Edit Tax
                     change_ratio = total_changes / max(1.0, valid_cells_b)
                     edit_tax = params['change_penalty'] * (change_ratio ** 1.5) * 100.0
 
-                    # 2. Empty Penalty
                     empty_before = ((x_initial[b] == 0) * valid_mask_float[b]).sum().item()
                     empty_after = ((x_0_pred[b] == 0) * valid_mask_float[b]).sum().item()
 
@@ -255,7 +259,6 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                     active_mask[b] = False
                     hits += 1
                 else:
-                    # 3. Critical Failure Penalty
                     if t_step == 1:
                         r = -params['massive_reward']
                     else:
@@ -264,7 +267,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
                 traj_rewards[b].append(r)
             x_t = x_t_minus_1
 
-    # Metric Calculation
+    # ── METRICS ──
     valid_cells = (valid_mask_float.sum(dim=(1, 2)) * model.N).clamp_min(1.0)
     changed_cells = ((x_initial != x_final) * valid_mask_float).sum(dim=(1, 2))
     empty_before_cells = ((x_initial == 0) * valid_mask_float).sum(dim=(1, 2))
@@ -274,6 +277,7 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
     empty_pct_before = (empty_before_cells / valid_cells).mean().item() * 100.0
     empty_pct_after = (empty_after_cells / valid_cells).mean().item() * 100.0
 
+    # ── PHASE 2: ADVANTAGE ESTIMATION ──
     all_returns = []
     batch_returns_lists = []
     for b in range(batch_size):
@@ -287,41 +291,81 @@ def run_rl_epoch(model, corrupt, optimizer, device, params, x_0_batch, x_start_b
         return 0.0, 0.0, 0.0, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
     baseline = sum(all_returns) / len(all_returns)
+    flat_returns = torch.tensor(all_returns, dtype=torch.float32, device=device)
+    flat_advs = flat_returns - baseline
+
+    adv_mean = flat_advs.mean() if len(flat_advs) > 1 else 0.0
+    adv_std = flat_advs.std() if len(flat_advs) > 1 else 1.0
+
+    # Map standardized advantages back to the transitions
+    b_step_indices = [0 for _ in range(batch_size)]
+    for trans in saved_transitions:
+        adv_tensor = torch.zeros(batch_size, device=device)
+        for b in range(batch_size):
+            if trans['active_mask'][b]:
+                adv = batch_returns_lists[b][b_step_indices[b]] - baseline
+                if len(flat_advs) > 1:
+                    adv = (adv - adv_mean) / (adv_std + 1e-8)
+                adv_tensor[b] = adv
+                b_step_indices[b] += 1
+        trans['advantage'] = adv_tensor
 
     if not update_model:
         return 0.0, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
-    optimizer.zero_grad()
+    # ── PHASE 3: PPO UPDATE LOOP ──
+    ppo_epochs = params.get('ppo_epochs', 3)
+    ppo_clip = params.get('ppo_clip', 0.2)
+    entropy_coef = params.get('entropy_coef', 0.01)
+
     total_policy_loss_val = 0.0
-    b_step_indices = [0 for _ in range(batch_size)]
     use_amp = device.type == "cuda"
 
-    for trans in saved_transitions:
-        active_curr = trans['active_mask']
-        if not active_curr.any():
-            continue
+    for ppo_epoch in range(ppo_epochs):
+        optimizer.zero_grad()
+        epoch_loss_val = 0.0
 
-        with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
-            logits = model(trans['x_t'], trans['t_tensor'], clause_mask=clause_mask)
-            dist = torch.distributions.Categorical(logits=logits)
-            step_log_probs = (dist.log_prob(trans['x_0_pred']) * valid_mask_float).sum(dim=(1, 2))
+        for trans in saved_transitions:
+            active_curr = trans['active_mask']
+            if not active_curr.any():
+                continue
 
-            step_loss = 0.0
-            has_loss = False
-            for b in range(batch_size):
-                if active_curr[b]:
-                    G_t = batch_returns_lists[b][b_step_indices[b]]
-                    b_step_indices[b] += 1
-                    advantage = G_t - baseline
-                    step_loss = step_loss - (step_log_probs[b] * advantage) / batch_size
-                    has_loss = True
+            with autocast(device_type='cuda', dtype=torch.bfloat16, enabled=use_amp):
+                logits = model(trans['x_t'], trans['t_tensor'], clause_mask=clause_mask)
+                dist = torch.distributions.Categorical(logits=logits)
 
-        if has_loss:
-            step_loss.backward()
-            total_policy_loss_val += step_loss.item()
+                new_log_probs = dist.log_prob(trans['x_0_pred'])
+                entropy_per_cell = dist.entropy()
 
-    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-    optimizer.step()
+                # Clamp log-ratio before exp to avoid AMP overflow / NaN.
+                log_ratio = new_log_probs - trans['old_log_prob']
+                ratio = torch.exp(torch.clamp(log_ratio, min=-20.0, max=5.0))
+
+                adv_grid = trans['advantage'].view(-1, 1, 1)
+                surr1 = ratio * adv_grid
+                surr2 = torch.clamp(ratio, 1.0 - ppo_clip, 1.0 + ppo_clip) * adv_grid
+
+                actor_loss_per_cell = -torch.min(surr1, surr2) * valid_mask_float
+                entropy_loss = (entropy_per_cell * valid_mask_float).sum(dim=(1, 2))
+                loss = actor_loss_per_cell.sum(dim=(1, 2)) - entropy_coef * entropy_loss
+
+                step_loss = 0.0
+                has_loss = False
+                for b in range(batch_size):
+                    if active_curr[b]:
+                        step_loss = step_loss + loss[b] / batch_size
+                        has_loss = True
+
+            if has_loss and isinstance(step_loss, torch.Tensor) and step_loss.requires_grad:
+                step_loss.backward()
+                epoch_loss_val += step_loss.item()
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        total_policy_loss_val += epoch_loss_val
+
+    # Average loss across PPO iterations
+    total_policy_loss_val /= ppo_epochs
 
     return total_policy_loss_val, (hits / batch_size) * 100, baseline, total_change_pct, empty_pct_before, empty_pct_after, batch_size
 
@@ -347,15 +391,13 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=PARAMS['lr'])
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
 
-    # Load fixed finetune datasets
     emit(f"Loading Finetune Datasets from disk...")
     train_loader, test_loader = load_hyperparam_dataloaders(batch_size=cfg["BATCH_SIZE"], num_timesteps=cfg["NUM_TIMESTEPS"])
 
-    # INFINITE ITERATOR SETUP
     batches_per_epoch = max(1, NUM_ROLLOUTS_PER_EPOCH // cfg["BATCH_SIZE"])
     train_iter = iter(get_infinite_batches(train_loader))
 
-    emit("\nStarting RL Fine-Tuning...")
+    emit("\nStarting PPO Fine-Tuning...")
     emit(f"Epochs: {NUM_EPOCHS} | Rollouts/Epoch: {NUM_ROLLOUTS_PER_EPOCH} | Batch Size: {cfg['BATCH_SIZE']} | Batches/Epoch: {batches_per_epoch}")
     start_t_min = max(1, int(round(START_DENOISE_TRAJ_PCT_MIN * (cfg["NUM_TIMESTEPS"] - 1))))
     start_t_max = max(1, min(cfg["NUM_TIMESTEPS"] - 1, int(round(START_DENOISE_TRAJ_PCT_MAX * (cfg["NUM_TIMESTEPS"] - 1)))))
@@ -366,11 +408,9 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for epoch in range(1, NUM_EPOCHS + 1):
-
         tr_loss, tr_sr, tr_base, tr_chg, tr_net_e = 0.0, 0.0, 0.0, 0.0, 0.0
         batches = 0
 
-        # --- SEQUENTIAL TRAINING BATCHING ---
         for _ in range(batches_per_epoch):
             x_0_batch, x_start_batch, clause_mask, start_t_batch = next(train_iter)
 
@@ -385,7 +425,6 @@ def main():
                 tr_net_e += (e_aft - e_bef)
                 batches += 1
 
-        # Step the learning rate scheduler
         scheduler.step()
 
         if batches > 0:
@@ -395,7 +434,6 @@ def main():
             tr_chg /= batches
             tr_net_e /= batches
 
-        # Validation (periodic)
         if epoch % VALIDATION_INTERVAL == 0:
             te_sr, te_chg, te_net_e = 0.0, 0.0, 0.0
             te_batches = 0
@@ -421,7 +459,6 @@ def main():
             emit(f"  Test  -> SR: {te_sr:6.2f}% | Edit: {te_chg:6.2f}% | NetEmpty: {te_net_e:+6.2f}%")
             emit("-" * 65)
 
-        # Periodic Checkpointing
         if epoch % SAVE_INTERVAL == 0:
             save_path = out_dir / f"theory_denoiser_rl_{run_id}_ep{epoch}.pt"
             torch.save({
@@ -434,7 +471,6 @@ def main():
             }, save_path)
             emit(f">>> Checkpoint saved: {save_path.name}")
 
-    # Final Checkpoint and Log Persist
     final_path = out_dir / f"theory_denoiser_rl_{run_id}_FINAL.pt"
     log_path = out_dir / f"finetune_log_{run_id}.txt"
 
